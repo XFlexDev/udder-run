@@ -254,8 +254,8 @@ let state: 'menu' | 'run' | 'dead' = 'menu';
 let speed = 0, dist = 0, score = 0, bells = 0, best = Number(localStorage.getItem('udder.best') || 0);
 let y = 0, vy = 0, jumpsLeft = 2, holding = false, grounded = true, wasCompressed = false;
 let deadT = 0, spin = new THREE.Vector3(), tumble = new THREE.Vector3(), deadX = 0, deadVx = 0;
-let nextSpawn = 0, shake = 0, comboTimer = 0, combo = 0;
-const G = 42, JUMP_V = 14.5, DJUMP_V = 12.5, HOP_V = 4.6, GROUND_K = 900, GROUND_C = 18;
+let nextSpawn = 0, shake = 0, comboTimer = 0, combo = 0, jumpBuffer = 0, flipT = -1, mooTimer = 6, hops = 0;
+const G = 40, JUMP_V = 15.5, DJUMP_V = 13.5, HOP_V = 5.4, GROUND_K = 480, GROUND_C = 8;
 const BASE_SPEED = 12, MAX_SPEED = 30;
 
 const scoreEl = $('score'), bestEl = $('best'), startEl = $('start'), overEl = $('over'), comboEl = $('combo');
@@ -276,21 +276,36 @@ function startRun() {
   vy = JUMP_V * 0.8; sfx.boing(0.9);
 }
 
+const SILLY = ['BOING!', 'YEEHAW!', 'MOO!', 'WHEEE!', 'UDDERLY!', 'SPLORT!', 'BWOMP!', 'MOOVE!', 'JIGGLE!', 'HOOF YEAH!'];
+const pick = <T,>(a: T[]) => a[(Math.random() * a.length) | 0];
 function jump() {
   if (state !== 'run') return;
-  if (jumpsLeft <= 0) return;
+  if (jumpsLeft <= 0) { jumpBuffer = 0.16; return; }
   const first = jumpsLeft === 2;
-  vy = first ? Math.max(vy, JUMP_V) : DJUMP_V;
   jumpsLeft--;
-  cow.shake(first ? 1.2 : 2.2);
-  sfx.boing(first ? 1 : 1.35);
-  if (!first) emit(new THREE.Vector3(0, y + 0.2, 0), 10, MILK, 4, 3, 0.07, 20, 0.5);
+  jumpBuffer = 0;
+  if (first) {
+    vy = Math.max(vy, JUMP_V) + (y < 0 ? -y * 6 : 0);
+    if (y < 0) y = 0;
+    cow.launch(1.2); cow.shake(1.4);
+    sfx.boing(0.9 + Math.random() * 0.25);
+    if (Math.random() < 0.35) popWord(pick(SILLY), 0.9);
+  } else {
+    vy = DJUMP_V;
+    flipT = 0;
+    cow.launch(1.6); cow.shake(2.6);
+    sfx.boing(1.4); sfx.squeak();
+    if (Math.random() < 0.5) sfx.moo(1.6 + Math.random() * 0.5, 0.35);
+    cow.teatTips.forEach(t => { t.getWorldPosition(tmp); emit(tmp, 6, MILK, 6, 2, 0.07, 22, 0.6); });
+    popWord(pick(SILLY), 1.15);
+  }
 }
 
 function die() {
-  state = 'dead'; deadT = 0;
-  vy = 11; deadX = 0; deadVx = -3;
-  spin.set((Math.random() - 0.5) * 8, 0, 9 + Math.random() * 5);
+  state = 'dead'; deadT = 0; flipT = -1;
+  vy = 17; deadX = 0; deadVx = -2.5; y = Math.max(0, y);
+  spin.set((Math.random() - 0.5) * 7, 0, 11 + Math.random() * 5);
+  sfx.whistle(true); popWord('MOOOOO!', 1.4);
   tumble.set(0, 0, 0);
   shake = 0.6;
   cow.shake(6);
@@ -307,6 +322,19 @@ function die() {
   }, 900);
 }
 
+const popLayer = document.createElement('div'); popLayer.id = 'pops'; document.body.appendChild(popLayer);
+function popWord(text: string, size = 1) {
+  const el = document.createElement('div');
+  el.className = 'pop'; el.textContent = text;
+  cow.root.getWorldPosition(tmp); tmp.y += 3.2; tmp.project(camera);
+  const x = (tmp.x * 0.5 + 0.5) * innerWidth + (Math.random() - 0.5) * 60, yy = (-tmp.y * 0.5 + 0.5) * innerHeight;
+  el.style.left = `${Math.min(innerWidth - 80, Math.max(80, x))}px`; el.style.top = `${Math.max(90, yy)}px`;
+  el.style.setProperty('--r', `${(Math.random() - 0.5) * 24}deg`);
+  el.style.setProperty('--s', String(size));
+  el.style.color = pick(['#fff7ec', '#ffd166', '#ff8fab', '#9be9ff']);
+  popLayer.appendChild(el);
+  setTimeout(() => el.remove(), 900);
+}
 function popCombo(text: string) {
   comboEl.textContent = text; comboEl.classList.add('show'); comboTimer = 0.8;
 }
@@ -363,7 +391,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) last 
 const qNames = ['Potato', 'Low', 'High', 'Ultra'];
 const qEl = $<HTMLInputElement>('quality'), qLabel = $('qlabel'), soundEl = $<HTMLInputElement>('sound'), jigEl = $<HTMLInputElement>('jiggle');
 const savedQ = localStorage.getItem('udder.q');
-let quality = savedQ !== null ? Number(savedQ) : isTouch ? 1 : 2;
+let quality = savedQ !== null ? Number(savedQ) : 2;
 let autoQ = savedQ === null;
 function applyQuality(q: number) {
   quality = q; qEl.value = String(q); qLabel.textContent = qNames[q];
@@ -390,6 +418,7 @@ $('gear').addEventListener('click', () => $('settings').classList.toggle('hidden
 
 // ---------- camera framing ----------
 const camBase = new THREE.Vector3(), camLook = new THREE.Vector3();
+let camFollow = 0;
 function resize() {
   const w = window.innerWidth, h = window.innerHeight;
   renderer.setSize(w, h, false);
@@ -397,10 +426,10 @@ function resize() {
   const a = camera.aspect;
   if (a < 1) { // portrait: pull behind the cow so the track recedes into view
     camera.fov = 62;
-    camBase.set(-8.6, 4.4, 3.9); camLook.set(5, 1.2, -0.3);
+    camBase.set(-11.5, 6.2, 6.2); camLook.set(4, 1.9, -0.6);
   } else {
     camera.fov = 45;
-    camBase.set(-4.5, 3.4, 10.5); camLook.set(6, 1.3, -0.5);
+    camBase.set(-4.8, 3.9, 11.5); camLook.set(6, 1.7, -0.5);
   }
   camera.updateProjectionMatrix();
 }
@@ -426,15 +455,20 @@ function step(dt: number) {
   if (state !== 'dead') {
     const n = 4, h = dt / n;
     for (let i = 0; i < n; i++) {
-      let a = -G * (holding && vy > 0 ? 0.72 : 1);
+      // floaty rise when holding, hang at apex, snappy fall
+      let gm = vy > 0 ? (holding ? 0.62 : 1) : 1.32;
+      if (Math.abs(vy) < 2.5 && y > 0.8) gm *= 0.55;
+      let a = -G * gm;
       if (y < 0) a += -y * GROUND_K - vy * GROUND_C;
       vy += a * h; y += vy * h;
       const compressed = y < 0;
       if (compressed && !wasCompressed) {
         const impact = -vy;
-        jumpsLeft = 2; grounded = true;
+        jumpsLeft = 2; grounded = true; hops++;
+        if (jumpBuffer > 0 && running) queueMicrotask(jump);
         if (impact > 9) {
-          cow.shake(Math.min(4, impact / 6));
+          cow.land(Math.min(4.5, impact / 5));
+          if (impact > 16 && Math.random() < 0.4) popWord(pick(['SPLOOSH!', 'SQUISH!', 'SPLAT!', 'BLORP!']), 1);
           sfx.squish(impact / 14);
           cow.teatTips.forEach(t => { t.getWorldPosition(tmp); emit(tmp, 3 + ((impact / 5) | 0), MILK, 3, 4 + impact * 0.2, 0.06, 26, 0.55); });
           if (impact > 14) shake = Math.max(shake, 0.12);
@@ -451,13 +485,26 @@ function step(dt: number) {
   } else {
     deadT += dt;
     vy -= G * 0.8 * dt; y += vy * dt; deadX += deadVx * dt;
-    if (y < 0) { y = 0; vy = Math.abs(vy) > 4 ? -vy * 0.45 : 0; spin.multiplyScalar(0.6); deadVx *= 0.6; if (Math.abs(vy) > 2) { cow.shake(3); sfx.squish(0.7); } }
+    if (y < 0) { y = 0; vy = Math.abs(vy) > 4 ? -vy * 0.55 : 0; spin.multiplyScalar(0.65); deadVx *= 0.6; if (Math.abs(vy) > 2) { cow.land(3); sfx.squish(0.8); sfx.boing(0.6); } }
     tumble.addScaledVector(spin, dt);
     cow.root.position.x = deadX;
-    cow.root.rotation.set(tumble.x, 0, tumble.z);
+    cow.root.rotation.set(tumble.x, 0, 0);
+    cow.spin = -tumble.z;
+  }
+  jumpBuffer = Math.max(0, jumpBuffer - dt);
+  if (flipT >= 0) {
+    flipT += dt;
+    const p = Math.min(1, flipT / 0.55);
+    const e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
+    cow.spin = -Math.PI * 2 * e;
+    if (p >= 1) { flipT = -1; cow.spin = 0; }
+  }
+  if (running) {
+    mooTimer -= dt;
+    if (mooTimer < 0) { mooTimer = 7 + Math.random() * 8; sfx.moo(1.1 + Math.random() * 0.6, 0.55); popWord('moo', 0.8); }
   }
   cow.update(dt, y, vy, state === 'dead' ? 4 : scroll, state === 'dead');
-  if (state !== 'dead') cow.root.rotation.z = THREE.MathUtils.lerp(cow.root.rotation.z, grounded ? 0 : THREE.MathUtils.clamp(vy * 0.02, -0.25, 0.25), 0.15);
+  if (state !== 'dead') cow.root.rotation.z = THREE.MathUtils.lerp(cow.root.rotation.z, grounded ? 0 : THREE.MathUtils.clamp(vy * 0.015, -0.2, 0.2), 1 - Math.exp(-dt * 8));
   blobShadow.position.x = cow.root.position.x;
   const bs = 1 / (1 + Math.max(0, y) * 0.35); blobShadow.scale.set(1.3 * bs, 0.8 * bs, 1);
 
@@ -479,27 +526,30 @@ function step(dt: number) {
   }
 
   // obstacles + collision
-  const cowL = -0.75, cowR = 1.15, cowB = Math.max(0, y) + 0.12, cowT = Math.max(0, y) + 2.0;
+  const yb = Math.max(0, y);
   for (let i = obstacles.length - 1; i >= 0; i--) {
     const o = obstacles[i];
     o.x -= dx; o.obj.position.x = o.x;
     if (running) {
       const l = o.x - o.w / 2 + 0.08, r = o.x + o.w / 2 - 0.08, top = o.h - 0.08;
-      if (r > cowL && l < cowR && cowB < top && cowT > 0) {
+      // udder hitbox, plus the fat body for tall stacks
+      const hitUdder = r > -0.7 && l < 0.75 && yb + 0.1 < top;
+      const hitBody = r > -1.1 && l < 1.5 && yb + 1.15 < top;
+      if (hitUdder || hitBody) {
         // landing on top from above is a hard bounce, not a crash
-        if (vy < 0 && cowB > top - 0.35) { y = top + 0.01; vy = JUMP_V * 0.75; jumpsLeft = 1; cow.shake(2.5); sfx.boing(0.8); popCombo('BOUNCE!'); score += 10; bells += 0.4; }
+        if (vy < 0 && yb + 0.1 > top - 0.4) { y = top + 0.01; vy = JUMP_V * 0.8; jumpsLeft = 1; cow.land(3); sfx.boing(0.8); sfx.squeak(); popWord('BOUNCE!', 1.1); bells += 0.4; }
         else die();
       }
     }
     if (o.x < -25) { scene.remove(o.obj); obstacles.splice(i, 1); }
   }
-  const cy = Math.max(0, y) + 1.1;
+  const cy = Math.max(0, y) + 1.5;
   for (let i = pickups.length - 1; i >= 0; i--) {
     const p = pickups[i];
     p.x -= dx; p.obj.position.x = p.x;
     p.obj.rotation.y += dt * 4;
     p.obj.position.y = p.y + Math.sin(time * 4 + p.x) * 0.12;
-    if (!p.taken && running && Math.abs(p.x - 0.2) < 1.2 && Math.abs(p.obj.position.y - cy) < 1.3) {
+    if (!p.taken && running && Math.abs(p.x - 0.2) < 1.2 && Math.abs(p.obj.position.y - cy) < 1.6) {
       p.taken = true; bells++; combo++;
       sfx.bell();
       emit(p.obj.position, 12, GOLD, 5, 5, 0.06, 10, 0.5);
@@ -530,13 +580,14 @@ function step(dt: number) {
 
   // camera
   shake = Math.max(0, shake - dt * 1.5);
-  const follow = Math.max(0, y) * (camera.aspect < 1 ? 0.6 : 0.35);
+  camFollow += (Math.max(0, y) * 0.75 - camFollow) * (1 - Math.exp(-dt * 6));
+  const follow = camFollow;
   const sway = Math.sin(time * 0.4) * 0.3;
   tmp.set(camBase.x + sway, camBase.y + follow, camBase.z);
   if (state === 'dead') tmp.x += Math.min(deadT, 1) * 1.5;
-  camera.position.lerp(tmp, 1 - Math.pow(0.001, dt));
-  camera.position.x += (Math.random() - 0.5) * shake; camera.position.y += (Math.random() - 0.5) * shake;
-  camera.lookAt(camLook.x + (state === 'dead' ? deadX * 0.5 - Math.min(deadT, 1) * 2 : 0), camLook.y + follow * 0.7, camLook.z);
+  camera.position.lerp(tmp, 1 - Math.exp(-dt * 5));
+  camera.position.x += Math.sin(time * 47) * shake; camera.position.y += Math.cos(time * 39) * shake;
+  camera.lookAt(camLook.x + (state === 'dead' ? deadX - Math.min(deadT, 1) * 3 : 0), camLook.y + follow * 0.85, camLook.z);
 }
 
 function frame(t: number) {

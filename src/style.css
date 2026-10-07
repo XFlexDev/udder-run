@@ -41,3 +41,14 @@ body.is-touch .touch { display: inline; } body.is-touch .desk { display: none; }
 #settings input[type=range] { width: 100%; accent-color: var(--pink); }
 #settings .row input[type=range] { width: 110px; }
 #settings input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--pink); }
+#pops { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+.pop { position: absolute; transform: translate(-50%, -50%) rotate(var(--r)) scale(calc(var(--s) * .3)); font-weight: 900;
+  font-size: clamp(26px, 6vw, 44px); letter-spacing: -1px; white-space: nowrap; -webkit-text-stroke: 2px #2a1220; paint-order: stroke fill;
+  text-shadow: 0 4px 0 #2a1220; animation: popin .9s cubic-bezier(.2,1.4,.4,1) forwards; }
+@keyframes popin {
+  0% { opacity: 0; transform: translate(-50%, -30%) rotate(var(--r)) scale(calc(var(--s) * .3)); }
+  18% { opacity: 1; transform: translate(-50%, -60%) rotate(var(--r)) scale(calc(var(--s) * 1.15)); }
+  35% { transform: translate(-50%, -65%) rotate(var(--r)) scale(var(--s)); }
+  75% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -110%) rotate(calc(var(--r) * 1.5)) scale(calc(var(--s) * .9)); }
+}

@@ -1,18 +1,18 @@
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 
+/** Damped spring; display through out() for a soft limit instead of hard clamping. */
 class Spring {
   x = 0; v = 0;
   constructor(public k: number, public c: number, public lim = 1) {}
   step(dt: number, force: number) {
     this.v += (-this.k * this.x - this.c * this.v + force) * dt;
     this.x += this.v * dt;
-    if (this.x > this.lim) { this.x = this.lim; if (this.v > 0) this.v *= -0.3; }
-    if (this.x < -this.lim) { this.x = -this.lim; if (this.v < 0) this.v *= -0.3; }
   }
+  out() { return this.lim * Math.tanh(this.x / this.lim); }
   kick(v: number) { this.v += v; }
   reset() { this.x = 0; this.v = 0; }
 }
+class Spring2 { a: Spring; b: Spring; constructor(k: number, c: number, lim: number) { this.a = new Spring(k, c, lim); this.b = new Spring(k * 0.93, c, lim); } }
 
 function spotsTexture() {
   const c = document.createElement('canvas');
@@ -20,281 +20,369 @@ function spotsTexture() {
   const g = c.getContext('2d')!;
   g.fillStyle = '#fbf6ee'; g.fillRect(0, 0, 512, 256);
   g.fillStyle = '#1b1416';
-  let seed = 7;
+  let seed = 11;
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-  for (let i = 0; i < 9; i++) {
-    const cx = rnd() * 512, cy = rnd() * 256, r = 26 + rnd() * 42;
+  for (let i = 0; i < 10; i++) {
+    const cx = rnd() * 512, cy = 40 + rnd() * 176, r = 22 + rnd() * 34;
     g.beginPath();
-    for (let a = 0; a <= Math.PI * 2 + 0.01; a += 0.3) {
-      const rr = r * (0.7 + 0.45 * Math.sin(a * 3 + i) * Math.cos(a * 2 - i) + rnd() * 0.12);
-      const px = cx + Math.cos(a) * rr * 1.3, py = cy + Math.sin(a) * rr;
+    for (let a = 0; a <= Math.PI * 2 + 0.01; a += 0.25) {
+      const rr = r * (0.75 + 0.35 * Math.sin(a * 3 + i) * Math.cos(a * 2 - i));
+      const px = cx + Math.cos(a) * rr * 1.2, py = cy + Math.sin(a) * rr;
       a === 0 ? g.moveTo(px, py) : g.lineTo(px, py);
     }
     g.closePath(); g.fill();
   }
   const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
   return t;
+}
+
+type Jelly = { off: THREE.Vector3; ripple: { value: number }; time: { value: number } };
+/** Vertex-level jelly: the top of the mesh lags behind by `off`, plus a travelling surface ripple. */
+function jellify(mat: THREE.Material, bottom: number, top: number): Jelly {
+  const off = new THREE.Vector3();
+  const ripple = { value: 0 }, time = { value: 0 };
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uOff = { value: off };
+    sh.uniforms.uRipple = ripple;
+    sh.uniforms.uTime = time;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform vec3 uOff; uniform float uRipple; uniform float uTime;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        float jw = smoothstep(${bottom.toFixed(3)}, ${top.toFixed(3)}, position.y);
+        transformed += uOff * jw * jw;
+        transformed += normal * sin(position.x * 7.0 + position.y * 5.0 - uTime * 18.0) * uRipple * jw;`);
+  };
+  return { off, ripple, time };
 }
 
 export class Cow {
   root = new THREE.Group();
-  private rig = new THREE.Group();
+  private pivot = new THREE.Group();
+  private inner = new THREE.Group();
   private udder = new THREE.Group();
   private udderMesh: THREE.Mesh;
   private body = new THREE.Group();
-  private bodyMesh: THREE.Mesh;
   private head = new THREE.Group();
   private jaw = new THREE.Group();
+  private tongue = new THREE.Group();
+  private cheeks: THREE.Mesh[] = [];
   private ears: THREE.Group[] = [];
   private teats: THREE.Group[] = [];
-  private legs: THREE.Group[] = [];
+  private legs: { upper: THREE.Group; lower: THREE.Group; s1: Spring2; s2: Spring2; side: number; front: number }[] = [];
   private tail: THREE.Group[] = [];
   private bell = new THREE.Group();
-  private eyeL: THREE.Mesh; private eyeR: THREE.Mesh;
+  private eyes: { pupil: THREE.Mesh; s: Spring2; side: number; lid: THREE.Mesh }[] = [];
+  private uJ: Jelly; private bJ: Jelly; private hJ: Jelly;
 
-  // jiggle springs
-  private uY = new Spring(150, 5.5, 0.3);
-  private uX = new Spring(120, 4.5, 0.25);
-  private uZ = new Spring(120, 4.5, 0.2);
-  private bY = new Spring(220, 9, 0.12);
-  private bP = new Spring(160, 7, 0.25);
-  private hY = new Spring(200, 7, 0.18);
-  private hP = new Spring(140, 5, 0.4);
-  private earS = [new Spring(90, 3, 1.1), new Spring(95, 3.2, 1.1)];
-  private teatS = [0, 1, 2, 3].map(i => [new Spring(110 + i * 9, 3, 0.9), new Spring(110 + i * 7, 3, 0.9)]);
-  private tailS = [new Spring(80, 3, 0.9), new Spring(70, 2.5, 1.0), new Spring(60, 2, 1.1)];
-  private bellS = new Spring(70, 2, 1.2);
+  private uY = new Spring(120, 3.2, 0.32);
+  private uX = new Spring(95, 2.6, 0.3);
+  private uZ = new Spring(95, 2.6, 0.26);
+  private bY = new Spring(140, 4.0, 0.16);
+  private bX = new Spring(110, 3.0, 0.35);
+  private bZ = new Spring(110, 3.0, 0.3);
+  private bP = new Spring(120, 4.5, 0.3);
+  private hY = new Spring(150, 4.5, 0.22);
+  private hP = new Spring(110, 3.5, 0.5);
+  private earS = [new Spring(70, 2, 1.3), new Spring(74, 2.1, 1.3)];
+  private teatS = [0, 1, 2, 3].map(i => new Spring2(85 + i * 8, 2.2, 1.0));
+  private tailS = [new Spring(60, 2.2, 1.0), new Spring(52, 1.8, 1.2), new Spring(45, 1.5, 1.3)];
+  private bellS = new Spring(55, 1.5, 1.3);
+  private tongueS = new Spring(60, 2, 1.2);
+  private cheekS = new Spring(130, 4, 0.5);
   private lastVy = 0;
   private t = 0;
   private blink = 2;
+  private tongueOut = 0;
   jiggle = 1;
+  spin = 0;
   teatTips: THREE.Object3D[] = [];
+  readonly pivotY = 1.75;
 
   constructor() {
-    const white = new THREE.MeshStandardMaterial({ color: 0xfbf6ee, roughness: 0.75 });
-    const black = new THREE.MeshStandardMaterial({ color: 0x1b1416, roughness: 0.6 });
-    const spots = new THREE.MeshStandardMaterial({ map: spotsTexture(), roughness: 0.75 });
-    const pink = new THREE.MeshPhysicalMaterial({ color: 0xff9fb2, roughness: 0.38, clearcoat: 0.6, clearcoatRoughness: 0.35, sheen: 0.6, sheenColor: new THREE.Color(0xffd0da) });
-    const pinkDark = new THREE.MeshStandardMaterial({ color: 0xf07c96, roughness: 0.45 });
-    const horn = new THREE.MeshStandardMaterial({ color: 0xf2e2c2, roughness: 0.5 });
-    const hoof = new THREE.MeshStandardMaterial({ color: 0x3a2a26, roughness: 0.5 });
-    const gold = new THREE.MeshStandardMaterial({ color: 0xffc94a, metalness: 0.85, roughness: 0.28 });
-    const eyeW = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 });
-    const shadowy = (m: THREE.Mesh) => { m.castShadow = true; m.receiveShadow = true; return m; };
+    const std = (o: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial(o);
+    const white = std({ color: 0xfbf6ee, roughness: 0.7 });
+    const black = std({ color: 0x1b1416, roughness: 0.5 });
+    const bodyMat = std({ map: spotsTexture(), roughness: 0.7 });
+    const headMat = std({ color: 0xfbf6ee, roughness: 0.7 });
+    const pink = new THREE.MeshPhysicalMaterial({ color: 0xff9fb2, roughness: 0.35, clearcoat: 0.7, clearcoatRoughness: 0.3, sheen: 0.6, sheenColor: new THREE.Color(0xffd0da) });
+    const pinkDark = std({ color: 0xf07c96, roughness: 0.45 });
+    const snoutMat = std({ color: 0xffb3c1, roughness: 0.5 });
+    const tongueMat = std({ color: 0xff5d84, roughness: 0.35 });
+    const horn = std({ color: 0xf2e2c2, roughness: 0.5 });
+    const hoof = std({ color: 0x3a2a26, roughness: 0.5 });
+    const gold = std({ color: 0xffc94a, metalness: 0.85, roughness: 0.28 });
+    const eyeW = std({ color: 0xffffff, roughness: 0.15 });
+    const sh = <T extends THREE.Object3D>(m: T) => { m.castShadow = true; m.receiveShadow = true; return m; };
 
-    this.root.add(this.rig);
+    this.root.add(this.pivot);
+    this.pivot.position.y = this.pivotY;
+    this.pivot.add(this.inner);
+    this.inner.position.y = -this.pivotY;
 
-    // udder
-    this.udderMesh = shadowy(new THREE.Mesh(new THREE.SphereGeometry(0.62, 40, 28), pink));
+    // ---- udder (the cow's one true foot) ----
+    this.uJ = jellify(pink, -0.6, 0.75);
+    this.udderMesh = sh(new THREE.Mesh(new THREE.SphereGeometry(0.72, 48, 32), pink));
     this.udder.add(this.udderMesh);
-    this.rig.add(this.udder);
-    const teatGeo = new THREE.CapsuleGeometry(0.085, 0.24, 6, 12);
-    teatGeo.translate(0, -0.17, 0);
-    const pos: [number, number][] = [[0.2, 0.2], [0.2, -0.2], [-0.2, 0.2], [-0.2, -0.2]];
-    pos.forEach(([x, z]) => {
+    this.inner.add(this.udder);
+    const teatGeo = new THREE.CapsuleGeometry(0.1, 0.28, 6, 14); teatGeo.translate(0, -0.2, 0);
+    ([[0.22, 0.22], [0.22, -0.22], [-0.22, 0.22], [-0.22, -0.22]] as const).forEach(([x, z]) => {
       const tg = new THREE.Group();
-      const dir = new THREE.Vector3(x, -0.55, z).normalize();
-      tg.position.copy(dir.clone().multiplyScalar(0.59));
-      tg.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), new THREE.Vector3(x * 2.6, -0.4, z * 2.6).normalize());
-      const m = shadowy(new THREE.Mesh(teatGeo, pinkDark));
-      tg.add(m);
-      const tip = new THREE.Object3D(); tip.position.y = -0.33; tg.add(tip);
+      tg.position.copy(new THREE.Vector3(x, -0.5, z).normalize().multiplyScalar(0.69));
+      tg.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), new THREE.Vector3(x * 2.6, -0.45, z * 2.6).normalize());
+      tg.add(sh(new THREE.Mesh(teatGeo, pinkDark)));
+      const tip = new THREE.Object3D(); tip.position.y = -0.4; tg.add(tip);
       this.teatTips.push(tip);
       tg.userData.base = tg.quaternion.clone();
-      this.udderMesh.add(tg);
-      this.teats.push(tg);
+      this.udderMesh.add(tg); this.teats.push(tg);
     });
 
-    // body
-    this.bodyMesh = shadowy(new THREE.Mesh(new RoundedBoxGeometry(1.9, 0.95, 1.0, 6, 0.38), spots));
-    this.body.add(this.bodyMesh);
-    this.rig.add(this.body);
+    // ---- big round body ----
+    const bodyGeo = new THREE.SphereGeometry(1, 56, 36); bodyGeo.scale(1.28, 0.92, 1.05);
+    this.bJ = jellify(bodyMat, -0.9, 0.95);
+    this.body.add(sh(new THREE.Mesh(bodyGeo, bodyMat)));
+    this.inner.add(this.body);
 
-    // legs: stubby, flailing
-    const legGeo = new THREE.CapsuleGeometry(0.13, 0.28, 6, 12); legGeo.translate(0, -0.2, 0);
-    const hoofGeo = new THREE.CylinderGeometry(0.14, 0.15, 0.12, 14);
-    [[0.62, 0.36], [0.62, -0.36], [-0.62, 0.36], [-0.62, -0.36]].forEach(([x, z], i) => {
-      const lg = new THREE.Group();
-      lg.position.set(x, -0.32, z);
-      const leg = shadowy(new THREE.Mesh(legGeo, i % 2 ? white : spots));
-      const h = shadowy(new THREE.Mesh(hoofGeo, hoof)); h.position.y = -0.45;
-      lg.add(leg, h);
-      lg.userData.side = Math.sign(z); lg.userData.front = Math.sign(x); lg.userData.phase = i * 1.7;
-      this.body.add(lg); this.legs.push(lg);
+    // ---- floppy stubby legs (never walk, only jiggle) ----
+    const upperGeo = new THREE.CapsuleGeometry(0.15, 0.2, 6, 14); upperGeo.translate(0, -0.14, 0);
+    const lowerGeo = new THREE.CapsuleGeometry(0.13, 0.14, 6, 14); lowerGeo.translate(0, -0.1, 0);
+    const hoofGeo = new THREE.CylinderGeometry(0.14, 0.16, 0.12, 16);
+    ([[0.72, 0.62], [0.72, -0.62], [-0.72, 0.62], [-0.72, -0.62]] as const).forEach(([x, z], i) => {
+      const upper = new THREE.Group();
+      upper.position.set(x, -0.42, z);
+      upper.add(sh(new THREE.Mesh(upperGeo, i === 1 ? black : white)));
+      const lower = new THREE.Group(); lower.position.y = -0.3;
+      lower.add(sh(new THREE.Mesh(lowerGeo, white)));
+      const hf = sh(new THREE.Mesh(hoofGeo, hoof)); hf.position.y = -0.24; lower.add(hf);
+      upper.add(lower);
+      this.body.add(upper);
+      this.legs.push({ upper, lower, s1: new Spring2(55 + i * 6, 1.6, 1.1), s2: new Spring2(70 + i * 5, 1.8, 1.3), side: Math.sign(z), front: Math.sign(x) });
     });
 
-    // head
-    this.head.position.set(1.0, 0.38, 0);
+    // ---- head ----
+    this.head.position.set(1.22, 0.42, 0);
     this.body.add(this.head);
-    const skull = shadowy(new THREE.Mesh(new RoundedBoxGeometry(0.72, 0.66, 0.66, 5, 0.24), white));
-    skull.position.set(0.18, 0.08, 0);
+    const skullGeo = new THREE.SphereGeometry(0.5, 40, 28); skullGeo.scale(1.0, 0.92, 1.0);
+    this.hJ = jellify(headMat, -0.4, 0.5);
+    const skull = sh(new THREE.Mesh(skullGeo, headMat)); skull.position.set(0.12, 0.1, 0);
     this.head.add(skull);
-    const patch = shadowy(new THREE.Mesh(new THREE.SphereGeometry(0.2, 18, 14), black));
-    patch.scale.set(1, 0.9, 0.45); patch.position.set(0.3, 0.2, 0.25); this.head.add(patch);
-    const snout = shadowy(new THREE.Mesh(new RoundedBoxGeometry(0.36, 0.38, 0.6, 5, 0.16), pink));
-    snout.position.set(0.56, -0.08, 0); this.head.add(snout);
-    this.jaw.position.set(0.5, -0.24, 0); this.head.add(this.jaw);
-    const jawM = shadowy(new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.12, 0.5, 3, 0.05), pink));
-    jawM.position.set(0.04, -0.02, 0); this.jaw.add(jawM);
-    [-0.13, 0.13].forEach(z => {
-      const n = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), black);
-      n.position.set(0.745, -0.04, z); n.scale.set(0.5, 1, 1); this.head.add(n);
+    const patch = sh(new THREE.Mesh(new THREE.SphereGeometry(0.22, 18, 14), black));
+    patch.scale.set(0.9, 0.85, 0.4); patch.position.set(0.2, 0.32, -0.33); patch.rotation.y = 0.5; this.head.add(patch);
+    const snout = sh(new THREE.Mesh(new THREE.SphereGeometry(0.34, 32, 22), snoutMat));
+    snout.scale.set(0.8, 0.7, 1.05); snout.position.set(0.52, -0.08, 0); this.head.add(snout);
+    [-0.14, 0.14].forEach(z => {
+      const n = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), black);
+      n.position.set(0.79, -0.02, z); n.scale.set(0.45, 1.1, 0.9); this.head.add(n);
     });
-    const mkEye = (z: number) => {
-      const e = new THREE.Group();
-      const w = new THREE.Mesh(new THREE.SphereGeometry(0.11, 16, 12), eyeW);
-      const p = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 10), black);
-      p.position.set(0.06, 0.01, Math.sign(z) * 0.04);
-      const glint = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), eyeW);
-      glint.position.set(0.11, 0.04, Math.sign(z) * 0.06);
-      e.add(w, p, glint);
-      e.position.set(0.42, 0.18, z);
-      this.head.add(e);
-      return e as unknown as THREE.Mesh;
-    };
-    this.eyeL = mkEye(0.26); this.eyeR = mkEye(-0.26);
     [-1, 1].forEach(s => {
-      const h = shadowy(new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.24, 10), horn));
-      h.position.set(0.12, 0.47, s * 0.2); h.rotation.x = s * -0.5; this.head.add(h);
+      const ch = sh(new THREE.Mesh(new THREE.SphereGeometry(0.17, 18, 14), headMat));
+      ch.position.set(0.3, -0.12, s * 0.34); this.head.add(ch); this.cheeks.push(ch);
+      const blush = new THREE.Mesh(new THREE.CircleGeometry(0.07, 16), std({ color: 0xff8fab, transparent: true, opacity: 0.7, roughness: 1 }));
+      blush.position.set(0.36, -0.1, s * 0.49); blush.rotation.y = s > 0 ? 0.4 : Math.PI - 0.4; this.head.add(blush);
+    });
+    this.jaw.position.set(0.48, -0.28, 0); this.head.add(this.jaw);
+    const jawM = sh(new THREE.Mesh(new THREE.SphereGeometry(0.22, 20, 14), snoutMat)); jawM.scale.set(1.05, 0.4, 1.2); this.jaw.add(jawM);
+    this.tongue.position.set(0.12, 0.02, 0.08); this.jaw.add(this.tongue);
+    const tg = new THREE.CapsuleGeometry(0.07, 0.24, 6, 12); tg.translate(0, -0.15, 0);
+    const tm = sh(new THREE.Mesh(tg, tongueMat)); tm.scale.set(1, 1, 1.5); this.tongue.add(tm);
+
+    // googly eyes
+    [1, -1].forEach(s => {
+      const e = new THREE.Group();
+      e.position.set(0.38, 0.3, s * 0.26);
+      const w = sh(new THREE.Mesh(new THREE.SphereGeometry(0.17, 24, 18), eyeW));
+      const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.085, 16, 12), black);
+      const glint = new THREE.Mesh(new THREE.SphereGeometry(0.022, 8, 6), eyeW); glint.position.set(0.05, 0.04, 0.03); pupil.add(glint);
+      const lid = new THREE.Mesh(new THREE.SphereGeometry(0.178, 24, 18, 0, Math.PI * 2, 0, Math.PI / 2), headMat);
+      lid.rotation.z = -Math.PI / 2 + 0.2; lid.scale.y = 0.02;
+      e.add(w, pupil, lid);
+      this.head.add(e);
+      this.eyes.push({ pupil, s: new Spring2(40, 1.2, 1.0), side: s, lid });
+    });
+    [-1, 1].forEach(s => {
+      const h = sh(new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.26, 12), horn));
+      h.position.set(0.0, 0.58, s * 0.24); h.rotation.x = s * -0.55; this.head.add(h);
       const ear = new THREE.Group();
-      ear.position.set(0.05, 0.3, s * 0.34);
-      const em = shadowy(new THREE.Mesh(new THREE.SphereGeometry(0.17, 16, 12), s > 0 ? black : white));
-      em.scale.set(0.55, 0.25, 1); em.position.z = s * 0.15;
-      const inner = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10), pinkDark);
-      inner.scale.set(0.45, 0.12, 0.85); inner.position.set(0.02, 0.025, s * 0.15);
-      ear.add(em, inner);
-      ear.userData.side = s;
+      ear.position.set(-0.05, 0.35, s * 0.42);
+      const em = sh(new THREE.Mesh(new THREE.SphereGeometry(0.2, 18, 12), s > 0 ? black : headMat));
+      em.scale.set(0.55, 0.22, 1); em.position.z = s * 0.18;
+      const inner = new THREE.Mesh(new THREE.SphereGeometry(0.14, 12, 10), pinkDark);
+      inner.scale.set(0.45, 0.12, 0.85); inner.position.set(0.02, 0.03, s * 0.18);
+      ear.add(em, inner); ear.userData.side = s;
       this.head.add(ear); this.ears.push(ear);
     });
 
-    // bell collar
-    this.bell.position.set(0.85, -0.05, 0);
+    // cowbell
+    this.bell.position.set(1.05, -0.2, 0);
     this.body.add(this.bell);
-    const bm = shadowy(new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.14, 0.2, 16, 1, true), gold));
-    bm.position.y = -0.12; (bm.material as THREE.Material).side = THREE.DoubleSide;
-    const clap = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6), gold); clap.position.y = -0.22;
+    const bm = sh(new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.16, 0.24, 18, 1, true), gold));
+    bm.position.y = -0.14; (bm.material as THREE.Material).side = THREE.DoubleSide;
+    const clap = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), gold); clap.position.y = -0.26;
     this.bell.add(bm, clap);
 
-    // tail chain
+    // tail
     let parent: THREE.Object3D = this.body;
-    const segGeo = new THREE.CapsuleGeometry(0.04, 0.22, 4, 8); segGeo.translate(0, -0.13, 0);
+    const segGeo = new THREE.CapsuleGeometry(0.045, 0.24, 4, 8); segGeo.translate(0, -0.14, 0);
     for (let i = 0; i < 3; i++) {
       const s = new THREE.Group();
-      s.position.set(i === 0 ? -0.95 : 0, i === 0 ? 0.3 : -0.26, 0);
-      s.add(shadowy(new THREE.Mesh(segGeo, white)));
-      if (i === 2) {
-        const tuft = shadowy(new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), black));
-        tuft.position.y = -0.3; tuft.scale.set(0.8, 1.3, 0.8); s.add(tuft);
-      }
+      s.position.set(i === 0 ? -1.22 : 0, i === 0 ? 0.3 : -0.28, 0);
+      s.add(sh(new THREE.Mesh(segGeo, white)));
+      if (i === 2) { const tuft = sh(new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), black)); tuft.position.y = -0.32; tuft.scale.set(0.8, 1.3, 0.8); s.add(tuft); }
       parent.add(s); this.tail.push(s); parent = s;
     }
   }
 
+  private all() {
+    return [this.uY, this.uX, this.uZ, this.bY, this.bX, this.bZ, this.bP, this.hY, this.hP, this.bellS, this.tongueS, this.cheekS,
+      ...this.earS, ...this.tailS, ...this.teatS.flatMap(s => [s.a, s.b]), ...this.legs.flatMap(l => [l.s1.a, l.s1.b, l.s2.a, l.s2.b]), ...this.eyes.flatMap(e => [e.s.a, e.s.b])];
+  }
   reset() {
-    [this.uY, this.uX, this.uZ, this.bY, this.bP, this.hY, this.hP, this.bellS, ...this.earS, ...this.tailS, ...this.teatS.flat()].forEach(s => s.reset());
+    this.all().forEach(s => s.reset());
     this.root.rotation.set(0, 0, 0);
-    this.rig.rotation.set(0, 0, 0);
-    this.lastVy = 0;
+    this.spin = 0; this.lastVy = 0; this.tongueOut = 0;
   }
 
-  /** big random shove of every spring (landings / crashes) */
+  /** shove every spring in a random direction */
   shake(amount: number) {
     const a = amount * this.jiggle;
     const r = () => (Math.random() * 2 - 1) * a;
     this.uX.kick(r() * 3); this.uZ.kick(r() * 3); this.uY.kick(-Math.abs(a) * 2);
-    this.hP.kick(r() * 4); this.bellS.kick(r() * 6);
+    this.bX.kick(r() * 2); this.bZ.kick(r() * 2);
+    this.hP.kick(r() * 4); this.bellS.kick(r() * 6); this.tongueS.kick(r() * 6);
     this.earS.forEach(s => s.kick(r() * 10));
-    this.teatS.forEach(p => { p[0].kick(r() * 9); p[1].kick(r() * 9); });
+    this.teatS.forEach(p => { p.a.kick(r() * 9); p.b.kick(r() * 9); });
     this.tailS.forEach(s => s.kick(r() * 8));
+    this.legs.forEach(l => { l.s1.a.kick(r() * 8); l.s1.b.kick(r() * 8); l.s2.a.kick(r() * 10); l.s2.b.kick(r() * 10); });
+    this.eyes.forEach(e => { e.s.a.kick(r() * 12); e.s.b.kick(r() * 12); });
+  }
+  /** pre-jump stretch: udder springs up, body sinks then follows */
+  launch(power: number) {
+    const J = this.jiggle;
+    this.uY.kick(5 * power * J); this.bY.kick(-2 * power * J); this.cheekS.kick(4 * power);
+    this.tongueOut = 1;
+  }
+  land(power: number) {
+    this.cheekS.kick(-6 * power * this.jiggle);
+    this.shake(power);
   }
 
-  /**
-   * y: physics height of the udder bottom (negative = compressing into ground)
-   * vy: vertical velocity, speed: run speed, dead: tumbling
-   */
   update(dt: number, y: number, vy: number, speed: number, dead: boolean) {
     this.t += dt;
-    const ay = (vy - this.lastVy) / Math.max(dt, 1e-4);
+    const ay = THREE.MathUtils.clamp((vy - this.lastVy) / Math.max(dt, 1e-4), -900, 900);
     this.lastVy = vy;
     const J = this.jiggle;
-    const aIn = THREE.MathUtils.clamp(ay, -900, 900);
+    const spinV = Math.sin(this.spin) * 30;
 
-    // fixed substeps so stiff springs stay stable
     const n = Math.max(1, Math.ceil(dt / (1 / 240)));
     const h = dt / n;
-    const wob = Math.sin(this.t * speed * 0.9);
+    const wob = Math.sin(this.t * 7.5);
     for (let i = 0; i < n; i++) {
-      this.uY.step(h, -aIn * 0.55 * J);
-      this.uX.step(h, (wob * 6 - speed * 0.3) * J);
-      this.uZ.step(h, Math.cos(this.t * speed * 0.45) * 4 * J);
-      this.bY.step(h, -aIn * 0.18 * J);
-      this.bP.step(h, (aIn * 0.012 + wob * 1.5) * J);
-      this.hY.step(h, -aIn * 0.25 * J);
-      this.hP.step(h, aIn * 0.03 * J);
-      this.earS.forEach((s, k) => s.step(h, (-aIn * 0.05 + this.hY.v * 25 + Math.sin(this.t * 9 + k) * 6) * J));
-      this.tailS.forEach((s, k) => s.step(h, (-aIn * 0.03 * (k + 1) + this.uX.v * 30 + speed * 0.9 + Math.sin(this.t * 7 - k) * 4) * J));
-      this.bellS.step(h, (this.bY.v * 40 - this.uX.v * 25) * J);
+      this.uY.step(h, -ay * 0.6 * J);
+      this.uX.step(h, (wob * 5 - speed * 0.25 + spinV) * J);
+      this.uZ.step(h, Math.cos(this.t * 4.1) * 4 * J);
+      this.bY.step(h, -ay * 0.22 * J);
+      this.bX.step(h, (-ay * 0.01 + this.uX.v * 6 - spinV * 0.5) * J);
+      this.bZ.step(h, (this.uZ.v * 6 + Math.sin(this.t * 3.3) * 2) * J);
+      this.bP.step(h, (ay * 0.012 + wob * 1.2) * J);
+      this.hY.step(h, -ay * 0.3 * J);
+      this.hP.step(h, (ay * 0.035 - spinV * 0.2) * J);
+      this.cheekS.step(h, -ay * 0.08 * J);
+      this.tongueS.step(h, (-ay * 0.06 + this.hY.v * 20 + speed * 0.5) * J);
+      this.earS.forEach((s, k) => s.step(h, (-ay * 0.06 + this.hY.v * 28 + Math.sin(this.t * 9 + k) * 5) * J));
+      this.tailS.forEach((s, k) => s.step(h, (-ay * 0.03 * (k + 1) + this.uX.v * 30 + speed * 0.9 + Math.sin(this.t * 7 - k) * 4) * J));
+      this.bellS.step(h, (this.bY.v * 40 - this.uX.v * 25 + spinV) * J);
       this.teatS.forEach((p, k) => {
-        p[0].step(h, (this.uX.v * 60 + this.uY.v * 20 * (k < 2 ? 1 : -1)) * J);
-        p[1].step(h, (this.uZ.v * 60 + this.uY.v * 25 * (k % 2 ? 1 : -1)) * J);
+        p.a.step(h, (this.uX.v * 60 + this.uY.v * 22 * (k < 2 ? 1 : -1)) * J);
+        p.b.step(h, (this.uZ.v * 60 + this.uY.v * 26 * (k % 2 ? 1 : -1)) * J);
+      });
+      this.legs.forEach((l, k) => {
+        const f = -ay * 0.05 * J;
+        l.s1.a.step(h, (f * l.side + this.bZ.v * 25 + Math.sin(this.t * 5 + k) * 2) * J);
+        l.s1.b.step(h, (f * 0.6 * l.front + this.bX.v * 20 - speed * 0.12 + spinV * 0.4) * J);
+        l.s2.a.step(h, (l.s1.a.v * 14) * J);
+        l.s2.b.step(h, (l.s1.b.v * 14) * J);
+      });
+      this.eyes.forEach((e, k) => {
+        e.s.a.step(h, (-ay * 0.05 + this.hY.v * 30 + spinV * 0.5) * J);
+        e.s.b.step(h, (this.hP.v * 30 * (k ? 1 : -1) + Math.sin(this.t * 2 + k * 3) * 2) * J);
       });
     }
 
-    // ground squash: udder volume-preserving compression
-    const comp = THREE.MathUtils.clamp(-y, 0, 0.42);
-    const stretch = THREE.MathUtils.clamp(this.uY.x * 1.4, -0.25, 0.3);
-    const sy = THREE.MathUtils.clamp(1 - comp * 1.35 + stretch, 0.45, 1.35);
+    // udder squash against the ground (volume preserving) + jelly lag
+    const comp = THREE.MathUtils.clamp(-y, 0, 0.5);
+    const stretch = this.uY.out() * 1.3;
+    const sy = THREE.MathUtils.clamp(1 - comp * 1.25 + stretch, 0.42, 1.45);
     const sxz = 1 / Math.sqrt(sy);
     this.root.position.y = Math.max(0, y);
-    this.udderMesh.scale.set(1.12 * sxz, sy, 1.05 * sxz);
-    this.udder.position.set(this.uX.x * 0.6, 0.62 * sy, this.uZ.x * 0.6);
-    this.udder.rotation.set(this.uZ.x * 0.6, 0, -this.uX.x * 0.8);
+    this.udderMesh.scale.set(1.1 * sxz, sy, 1.05 * sxz);
+    this.udder.position.set(this.uX.out() * 0.35, 0.72 * sy, this.uZ.out() * 0.35);
+    this.uJ.off.set(this.uX.out() * 0.5, this.uY.out() * 0.3, this.uZ.out() * 0.5);
+    this.uJ.ripple.value = Math.min(0.05, Math.abs(this.uY.v) * 0.006) * J;
+    this.uJ.time.value = this.t;
+    this.teats.forEach((t, k) => {
+      const q = (t.userData.base as THREE.Quaternion).clone();
+      q.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(this.teatS[k].b.out(), 0, -this.teatS[k].a.out())));
+      t.quaternion.copy(q);
+      t.scale.set(1, 1 + comp * 1.1, 1);
+    });
 
-    const bodyY = 1.24 * sy * 0.9 + 0.36 + this.bY.x;
+    const bodyY = 1.44 * sy * 0.82 + 0.72 + this.bY.out();
     this.body.position.set(0, bodyY, 0);
-    const bsq = 1 - this.bY.x * 1.2;
-    this.body.scale.set(1 / Math.sqrt(bsq), bsq, 1 / Math.sqrt(bsq));
-    this.body.rotation.z = this.bP.x + (dead ? 0 : THREE.MathUtils.clamp(vy * 0.012, -0.2, 0.2));
-    this.body.rotation.x = this.uZ.x * 0.25;
+    const bsq = 1 - this.bY.out() * 1.6 + comp * 0.15;
+    const bw = 1 / Math.sqrt(Math.max(0.5, bsq));
+    this.body.scale.set(bw, bsq, bw);
+    this.body.rotation.z = this.bP.out() + (dead ? 0 : THREE.MathUtils.clamp(vy * 0.01, -0.18, 0.18));
+    this.body.rotation.x = this.uZ.out() * 0.2;
+    this.bJ.off.set(this.bX.out() * 0.6, this.bY.out() * 0.8, this.bZ.out() * 0.6);
+    this.bJ.ripple.value = Math.min(0.035, Math.abs(this.bY.v) * 0.004) * J;
+    this.bJ.time.value = this.t;
 
-    this.head.position.y = 0.38 + this.hY.x;
-    this.head.rotation.z = this.hP.x * 0.8 + Math.sin(this.t * speed * 0.45) * 0.05;
-    this.jaw.rotation.z = -Math.max(0, this.hY.x * 2.5) - (dead ? 0.5 : 0);
+    this.head.position.y = 0.42 + this.hY.out();
+    this.head.rotation.z = this.hP.out() * 0.7 + Math.sin(this.t * 3.7) * 0.04;
+    this.hJ.off.set(this.hP.out() * 0.15, this.hY.out() * 0.6, 0);
+    this.hJ.time.value = this.t;
+    const cs = 1 + THREE.MathUtils.clamp(this.cheekS.out(), -0.3, 0.5);
+    this.cheeks.forEach(c => c.scale.set(cs, 1 / Math.sqrt(cs), cs));
+
+    // tongue flops out when airborne
+    const air = y > 0.25 || dead;
+    this.tongueOut = THREE.MathUtils.lerp(this.tongueOut, air ? 1 : 0, 1 - Math.exp(-dt * (air ? 10 : 6)));
+    this.tongue.scale.setScalar(Math.max(0.001, this.tongueOut));
+    this.tongue.rotation.z = 0.9 + this.tongueS.out() * 0.9;
+    this.tongue.rotation.x = Math.sin(this.t * 13) * 0.3 * this.tongueOut;
+    this.jaw.rotation.z = -Math.max(0, this.hY.out() * 2) - this.tongueOut * 0.35 - (dead ? 0.3 : 0);
 
     this.ears.forEach((e, k) => {
       const s = e.userData.side as number;
-      e.rotation.x = s * (0.25 + this.earS[k].x * 0.9);
-      e.rotation.y = s * this.earS[k].x * 0.3;
+      e.rotation.x = s * (0.35 + this.earS[k].out() * 0.9);
+      e.rotation.y = s * this.earS[k].out() * 0.3;
     });
-    this.teats.forEach((t, k) => {
-      const q = (t.userData.base as THREE.Quaternion).clone();
-      q.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(this.teatS[k][1].x, 0, -this.teatS[k][0].x)));
-      t.quaternion.copy(q);
-      t.scale.y = 1 + comp * 0.8;
-    });
-    this.tail[0].rotation.z = -0.4 - this.tailS[0].x * 0.6;
-    this.tail[1].rotation.z = -this.tailS[1].x * 0.7;
-    this.tail[2].rotation.z = -this.tailS[2].x * 0.8;
+    this.tail[0].rotation.z = -0.4 - this.tailS[0].out() * 0.6;
+    this.tail[1].rotation.z = -this.tailS[1].out() * 0.7;
+    this.tail[2].rotation.z = -this.tailS[2].out() * 0.8;
     this.tail.forEach((s, k) => (s.rotation.x = Math.sin(this.t * 6 - k) * 0.25));
-    this.bell.rotation.z = this.bellS.x * 0.9;
+    this.bell.rotation.z = this.bellS.out() * 0.9;
 
-    // legs paddle like a cartoon running in the air
-    const f = 4 + speed * 0.75;
     this.legs.forEach(l => {
-      const ph = l.userData.phase as number, side = l.userData.side as number, front = l.userData.front as number;
-      const air = y > 0.15 ? 1 : 0;
-      l.rotation.z = Math.sin(this.t * f + ph) * (0.9 + air * 0.3) + front * 0.35;
-      l.rotation.x = side * (0.5 + air * 0.4 + Math.cos(this.t * f + ph) * 0.15);
-      if (dead) { l.rotation.z = Math.sin(this.t * 30 + ph) * 1.4; l.rotation.x = side * 1.2; }
+      l.upper.rotation.x = l.side * 0.45 + l.s1.a.out() * 0.9;
+      l.upper.rotation.z = l.front * 0.15 + l.s1.b.out() * 0.9;
+      l.lower.rotation.x = l.s2.a.out() * 0.9;
+      l.lower.rotation.z = l.s2.b.out() * 0.9;
     });
 
-    // blinking
+    // googly pupils roll around the eyeball
     this.blink -= dt;
-    const closed = this.blink < 0.12 || dead;
-    const ey = closed ? 0.12 : 1;
-    this.eyeL.scale.y = ey; this.eyeR.scale.y = ey;
+    const closed = (this.blink < 0.1 && !dead) ? 1 : 0;
+    this.eyes.forEach(e => {
+      const dy = THREE.MathUtils.clamp(e.s.a.out() * 1.1, -1, 1), dz = THREE.MathUtils.clamp(e.s.b.out() * 1.1, -1, 1);
+      const dir = new THREE.Vector3(1, dy * 1.2 - 0.15, e.side * 0.35 + dz * 1.2);
+      if (dead) dir.set(1, Math.sin(this.t * 14 + e.side), Math.cos(this.t * 14 + e.side) * e.side);
+      dir.normalize();
+      e.pupil.position.copy(dir.multiplyScalar(0.12));
+      e.lid.scale.y = closed ? 1 : 0.02;
+    });
     if (this.blink < 0) this.blink = 1.5 + Math.random() * 3;
+
+    this.pivot.rotation.z = this.spin;
   }
 }

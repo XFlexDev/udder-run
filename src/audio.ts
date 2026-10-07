@@ -77,28 +77,54 @@ export class Sfx {
     });
   }
 
-  moo() {
+  moo(pitch = 1, dur = 1.25) {
     const c = this.ok(); if (!c) return;
-    const t = c.currentTime, dur = 1.25;
+    const t = c.currentTime;
     const o = c.createOscillator(), o2 = c.createOscillator();
     o.type = 'sawtooth'; o2.type = 'sawtooth';
-    o.frequency.setValueAtTime(120, t);
-    o.frequency.linearRampToValueAtTime(150, t + 0.25);
-    o.frequency.linearRampToValueAtTime(95, t + dur);
-    o2.frequency.setValueAtTime(121.5, t);
-    o2.frequency.linearRampToValueAtTime(151, t + 0.25);
-    o2.frequency.linearRampToValueAtTime(96, t + dur);
+    const P = pitch, a = Math.min(0.25, dur * 0.25);
+    o.frequency.setValueAtTime(120 * P, t);
+    o.frequency.linearRampToValueAtTime(150 * P, t + a);
+    o.frequency.linearRampToValueAtTime(95 * P, t + dur);
+    o2.frequency.setValueAtTime(121.5 * P, t);
+    o2.frequency.linearRampToValueAtTime(151 * P, t + a);
+    o2.frequency.linearRampToValueAtTime(96 * P, t + dur);
     const vib = c.createOscillator(), vg = c.createGain();
     vib.frequency.value = 5.5; vg.gain.value = 3; vib.connect(vg); vg.connect(o.frequency); vg.connect(o2.frequency);
     const f1 = c.createBiquadFilter(); f1.type = 'bandpass'; f1.Q.value = 4;
-    f1.frequency.setValueAtTime(350, t); f1.frequency.linearRampToValueAtTime(800, t + 0.35); f1.frequency.linearRampToValueAtTime(420, t + dur);
+    f1.frequency.setValueAtTime(350 * pitch, t); f1.frequency.linearRampToValueAtTime(800 * pitch, t + Math.min(0.35, dur * 0.3)); f1.frequency.linearRampToValueAtTime(420, t + dur);
     const f2 = c.createBiquadFilter(); f2.type = 'lowpass'; f2.frequency.value = 1400;
     const g = c.createGain();
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(0.9, t + 0.12);
-    g.gain.setValueAtTime(0.9, t + dur - 0.35);
+    g.gain.setValueAtTime(0.9, t + Math.max(0.13, dur - 0.35));
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(f1); o2.connect(f1); f1.connect(f2).connect(g).connect(this.master!);
     [o, o2, vib].forEach(n => { n.start(t); n.stop(t + dur + 0.05); });
+  }
+
+  squeak() {
+    const c = this.ok(); if (!c) return;
+    const t = c.currentTime;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(700, t);
+    o.frequency.exponentialRampToValueAtTime(1900, t + 0.09);
+    o.frequency.exponentialRampToValueAtTime(900, t + 0.2);
+    const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 2500;
+    this.env(g, t, 0.005, 0.12, 0.2);
+    o.connect(f).connect(g).connect(this.master!); o.start(t); o.stop(t + 0.25);
+  }
+
+  whistle(up = false) {
+    const c = this.ok(); if (!c) return;
+    const t = c.currentTime, d = 0.9;
+    const o = c.createOscillator(), g = c.createGain(), v = c.createOscillator(), vg = c.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(up ? 400 : 1600, t);
+    o.frequency.exponentialRampToValueAtTime(up ? 1600 : 300, t + d);
+    v.frequency.value = 7; vg.gain.value = 25; v.connect(vg).connect(o.frequency);
+    this.env(g, t, 0.02, 0.2, d);
+    o.connect(g).connect(this.master!); [o, v].forEach(n => { n.start(t); n.stop(t + d + 0.05); });
   }
 }
