@@ -75,21 +75,21 @@ export class Cow {
   private eyes: { pupil: THREE.Mesh; s: Spring2; side: number; lid: THREE.Mesh }[] = [];
   private uJ: Jelly; private bJ: Jelly; private hJ: Jelly;
 
-  private uY = new Spring(120, 3.2, 0.32);
-  private uX = new Spring(95, 2.6, 0.3);
-  private uZ = new Spring(95, 2.6, 0.26);
-  private bY = new Spring(140, 4.0, 0.16);
-  private bX = new Spring(110, 3.0, 0.35);
-  private bZ = new Spring(110, 3.0, 0.3);
-  private bP = new Spring(120, 4.5, 0.3);
-  private hY = new Spring(150, 4.5, 0.22);
-  private hP = new Spring(110, 3.5, 0.5);
-  private earS = [new Spring(70, 2, 1.3), new Spring(74, 2.1, 1.3)];
-  private teatS = [0, 1, 2, 3].map(i => new Spring2(85 + i * 8, 2.2, 1.0));
-  private tailS = [new Spring(60, 2.2, 1.0), new Spring(52, 1.8, 1.2), new Spring(45, 1.5, 1.3)];
-  private bellS = new Spring(55, 1.5, 1.3);
-  private tongueS = new Spring(60, 2, 1.2);
-  private cheekS = new Spring(130, 4, 0.5);
+  private uY = new Spring(100, 2.8, 0.34);
+  private uX = new Spring(75, 1.3, 0.48);
+  private uZ = new Spring(75, 1.3, 0.42);
+  private bY = new Spring(110, 3.0, 0.15);
+  private bX = new Spring(80, 1.4, 0.6);
+  private bZ = new Spring(80, 1.4, 0.5);
+  private bP = new Spring(90, 2.0, 0.42);
+  private hY = new Spring(110, 2.0, 0.36);
+  private hP = new Spring(85, 1.6, 0.7);
+  private earS = [new Spring(55, 1.0, 1.7), new Spring(60, 1.1, 1.7)];
+  private teatS = [0, 1, 2, 3].map(i => new Spring2(70 + i * 7, 1.1, 1.4));
+  private tailS = [new Spring(48, 1.1, 1.3), new Spring(42, 0.9, 1.5), new Spring(36, 0.8, 1.7)];
+  private bellS = new Spring(45, 0.8, 1.6);
+  private tongueS = new Spring(48, 1.0, 1.5);
+  private cheekS = new Spring(100, 1.8, 0.7);
   private lastVy = 0;
   private t = 0;
   private blink = 2;
@@ -156,7 +156,7 @@ export class Cow {
       const hf = sh(new THREE.Mesh(hoofGeo, hoof)); hf.position.y = -0.24; lower.add(hf);
       upper.add(lower);
       this.body.add(upper);
-      this.legs.push({ upper, lower, s1: new Spring2(55 + i * 6, 1.6, 1.1), s2: new Spring2(70 + i * 5, 1.8, 1.3), side: Math.sign(z), front: Math.sign(x) });
+      this.legs.push({ upper, lower, s1: new Spring2(42 + i * 5, 0.8, 1.5), s2: new Spring2(55 + i * 4, 0.9, 1.7), side: Math.sign(z), front: Math.sign(x) });
     });
 
     // ---- head ----
@@ -197,7 +197,7 @@ export class Cow {
       lid.rotation.z = -Math.PI / 2 + 0.2; lid.scale.y = 0.02;
       e.add(w, pupil, lid);
       this.head.add(e);
-      this.eyes.push({ pupil, s: new Spring2(40, 1.2, 1.0), side: s, lid });
+      this.eyes.push({ pupil, s: new Spring2(32, 0.6, 1.2), side: s, lid });
     });
     [-1, 1].forEach(s => {
       const h = sh(new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.26, 12), horn));
@@ -244,7 +244,7 @@ export class Cow {
 
   /** shove every spring in a random direction */
   shake(amount: number) {
-    const a = amount * this.jiggle;
+    const a = amount * this.jiggle * 1.7;
     const r = () => (Math.random() * 2 - 1) * a;
     this.uX.kick(r() * 3); this.uZ.kick(r() * 3); this.uY.kick(-Math.abs(a) * 2);
     this.bX.kick(r() * 2); this.bZ.kick(r() * 2);
@@ -258,11 +258,15 @@ export class Cow {
   /** pre-jump stretch: udder springs up, body sinks then follows */
   launch(power: number) {
     const J = this.jiggle;
-    this.uY.kick(5 * power * J); this.bY.kick(-2 * power * J); this.cheekS.kick(4 * power);
+    this.uY.kick(8 * power * J); this.bY.kick(-3.5 * power * J); this.hY.kick(-3 * power * J); this.cheekS.kick(6 * power * J);
+    this.legs.forEach(l => { l.s1.a.kick(-l.side * 9 * power * J); l.s2.a.kick(l.side * 12 * power * J); });
+    this.earS.forEach(e => e.kick(-12 * power * J));
     this.tongueOut = 1;
   }
   land(power: number) {
-    this.cheekS.kick(-6 * power * this.jiggle);
+    const J = this.jiggle;
+    this.cheekS.kick(-9 * power * J); this.bY.kick(-2.5 * power * J); this.hY.kick(-2.5 * power * J);
+    this.legs.forEach(l => { l.s1.a.kick(l.side * 10 * power * J); l.s2.a.kick(-l.side * 14 * power * J); });
     this.shake(power);
   }
 
@@ -270,7 +274,7 @@ export class Cow {
     this.t += dt;
     const ay = THREE.MathUtils.clamp((vy - this.lastVy) / Math.max(dt, 1e-4), -900, 900);
     this.lastVy = vy;
-    const J = this.jiggle;
+    const J = this.jiggle * 1.25;
     const spinV = Math.sin(this.spin) * 30;
 
     const n = Math.max(1, Math.ceil(dt / (1 / 240)));
@@ -310,14 +314,14 @@ export class Cow {
 
     // udder squash against the ground (volume preserving) + jelly lag
     const comp = THREE.MathUtils.clamp(-y, 0, 0.5);
-    const stretch = this.uY.out() * 1.3;
-    const sy = THREE.MathUtils.clamp(1 - comp * 1.25 + stretch, 0.42, 1.45);
+    const stretch = this.uY.out() * 0.9;
+    const sy = THREE.MathUtils.clamp(1 - comp * 1.1 + stretch, 0.68, 1.3);
     const sxz = 1 / Math.sqrt(sy);
     this.root.position.y = Math.max(0, y);
     this.udderMesh.scale.set(1.1 * sxz, sy, 1.05 * sxz);
-    this.udder.position.set(this.uX.out() * 0.35, 0.72 * sy, this.uZ.out() * 0.35);
-    this.uJ.off.set(this.uX.out() * 0.5, this.uY.out() * 0.3, this.uZ.out() * 0.5);
-    this.uJ.ripple.value = Math.min(0.05, Math.abs(this.uY.v) * 0.006) * J;
+    this.udder.position.set(this.uX.out() * 0.45, 0.72 * sy, this.uZ.out() * 0.45);
+    this.uJ.off.set(this.uX.out() * 0.8, this.uY.out() * 0.45, this.uZ.out() * 0.8);
+    this.uJ.ripple.value = (0.012 + Math.min(0.1, Math.abs(this.uY.v) * 0.012)) * this.jiggle;
     this.uJ.time.value = this.t;
     this.teats.forEach((t, k) => {
       const q = (t.userData.base as THREE.Quaternion).clone();
@@ -328,20 +332,21 @@ export class Cow {
 
     const bodyY = 1.44 * sy * 0.82 + 0.72 + this.bY.out();
     this.body.position.set(0, bodyY, 0);
-    const bsq = 1 - this.bY.out() * 1.6 + comp * 0.15;
-    const bw = 1 / Math.sqrt(Math.max(0.5, bsq));
+    const bsq = THREE.MathUtils.clamp(1 - this.bY.out() * 1.3 + comp * 0.15, 0.82, 1.18);
+    const bw = 1 / Math.sqrt(Math.max(0.45, bsq));
     this.body.scale.set(bw, bsq, bw);
     this.body.rotation.z = this.bP.out() + (dead ? 0 : THREE.MathUtils.clamp(vy * 0.01, -0.18, 0.18));
-    this.body.rotation.x = this.uZ.out() * 0.2;
-    this.bJ.off.set(this.bX.out() * 0.6, this.bY.out() * 0.8, this.bZ.out() * 0.6);
-    this.bJ.ripple.value = Math.min(0.035, Math.abs(this.bY.v) * 0.004) * J;
+    this.body.rotation.x = this.uZ.out() * 0.3 + this.bZ.out() * 0.25;
+    this.bJ.off.set(this.bX.out() * 0.85, this.bY.out() * 1.0, this.bZ.out() * 0.85);
+    this.bJ.ripple.value = (0.01 + Math.min(0.08, Math.abs(this.bY.v) * 0.01 + Math.abs(this.bX.v) * 0.004)) * this.jiggle;
     this.bJ.time.value = this.t;
 
     this.head.position.y = 0.42 + this.hY.out();
     this.head.rotation.z = this.hP.out() * 0.7 + Math.sin(this.t * 3.7) * 0.04;
-    this.hJ.off.set(this.hP.out() * 0.15, this.hY.out() * 0.6, 0);
+    this.hJ.off.set(this.hP.out() * 0.3, this.hY.out() * 1.0, this.bZ.out() * 0.3);
+    this.hJ.ripple.value = Math.min(0.05, Math.abs(this.hY.v) * 0.008) * this.jiggle;
     this.hJ.time.value = this.t;
-    const cs = 1 + THREE.MathUtils.clamp(this.cheekS.out(), -0.3, 0.5);
+    const cs = 1 + THREE.MathUtils.clamp(this.cheekS.out(), -0.4, 0.7);
     this.cheeks.forEach(c => c.scale.set(cs, 1 / Math.sqrt(cs), cs));
 
     // tongue flops out when airborne
@@ -354,8 +359,8 @@ export class Cow {
 
     this.ears.forEach((e, k) => {
       const s = e.userData.side as number;
-      e.rotation.x = s * (0.35 + this.earS[k].out() * 0.9);
-      e.rotation.y = s * this.earS[k].out() * 0.3;
+      e.rotation.x = s * (0.35 + this.earS[k].out() * 1.1);
+      e.rotation.y = s * this.earS[k].out() * 0.45;
     });
     this.tail[0].rotation.z = -0.4 - this.tailS[0].out() * 0.6;
     this.tail[1].rotation.z = -this.tailS[1].out() * 0.7;
@@ -364,10 +369,10 @@ export class Cow {
     this.bell.rotation.z = this.bellS.out() * 0.9;
 
     this.legs.forEach(l => {
-      l.upper.rotation.x = l.side * 0.45 + l.s1.a.out() * 0.9;
-      l.upper.rotation.z = l.front * 0.15 + l.s1.b.out() * 0.9;
-      l.lower.rotation.x = l.s2.a.out() * 0.9;
-      l.lower.rotation.z = l.s2.b.out() * 0.9;
+      l.upper.rotation.x = l.side * 0.45 + l.s1.a.out() * 1.1;
+      l.upper.rotation.z = l.front * 0.15 + l.s1.b.out() * 1.1;
+      l.lower.rotation.x = l.s2.a.out() * 1.2;
+      l.lower.rotation.z = l.s2.b.out() * 1.2;
     });
 
     // googly pupils roll around the eyeball

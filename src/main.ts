@@ -472,7 +472,7 @@ function step(dt: number) {
           sfx.squish(impact / 14);
           cow.teatTips.forEach(t => { t.getWorldPosition(tmp); emit(tmp, 3 + ((impact / 5) | 0), MILK, 3, 4 + impact * 0.2, 0.06, 26, 0.55); });
           if (impact > 14) shake = Math.max(shake, 0.12);
-        } else if (running || state === 'menu') sfx.plop();
+        } else { cow.land(0.6 + impact * 0.06); if (running || state === "menu") sfx.plop(); }
         emit(new THREE.Vector3(0, 0.05, 0), 3, DUST, 2, 1.5, 0.12, 4, 0.5);
       }
       if (!compressed && wasCompressed) {
