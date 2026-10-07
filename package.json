@@ -1,0 +1,9 @@
+{
+  "name": "udder-run",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": { "dev": "vite --host", "build": "tsc --noEmit && vite build", "preview": "vite preview --host" },
+  "dependencies": { "three": "0.180.0" },
+  "devDependencies": { "vite": "^6.3.5", "typescript": "^5.6.3", "@types/three": "0.180.0" }
+}

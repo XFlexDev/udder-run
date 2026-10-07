@@ -1,0 +1,43 @@
+:root { --ink: #fff7ec; --pink: #ff8fab; --gold: #ffd166; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0a14; color: var(--ink);
+  font-family: ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif;
+  touch-action: none; user-select: none; -webkit-user-select: none; overscroll-behavior: none; }
+canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+#hud { position: fixed; top: calc(env(safe-area-inset-top) + 14px); left: 0; right: 0; text-align: center; pointer-events: none;
+  text-shadow: 0 3px 0 rgba(60,20,40,.35), 0 8px 24px rgba(0,0,0,.35); }
+#score { font-size: clamp(44px, 9vw, 72px); font-weight: 900; letter-spacing: -1px; line-height: 1; font-variant-numeric: tabular-nums; }
+#best { font-size: 13px; font-weight: 800; opacity: .75; letter-spacing: 2px; margin-top: 4px; }
+#combo { position: fixed; top: 32%; left: 0; right: 0; text-align: center; font-weight: 900; font-size: 28px; color: var(--gold);
+  pointer-events: none; opacity: 0; transform: translateY(10px) scale(.9); transition: opacity .18s, transform .25s cubic-bezier(.2,.9,.3,1.1);
+  text-shadow: 0 3px 0 rgba(90,50,0,.4); }
+#combo.show { opacity: 1; transform: none; }
+.overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+  padding: 24px; background: radial-gradient(ellipse at center, rgba(13,10,20,.15), rgba(13,10,20,.65)); transition: opacity .35s ease; }
+.overlay.hidden { opacity: 0; pointer-events: none; }
+h1 { font-size: clamp(64px, 16vw, 132px); line-height: .86; margin: 0 0 18px; font-weight: 900; letter-spacing: -3px;
+  color: var(--ink); text-shadow: 0 6px 0 var(--pink), 0 12px 0 rgba(120,30,70,.55), 0 30px 60px rgba(0,0,0,.5);
+  animation: bob 1.6s ease-in-out infinite; }
+h2 { font-size: clamp(36px, 9vw, 64px); margin: 0 0 8px; font-weight: 900; color: var(--pink); text-shadow: 0 4px 0 rgba(120,30,70,.6); }
+#final { font-size: clamp(64px, 15vw, 110px); font-weight: 900; line-height: 1; text-shadow: 0 5px 0 rgba(60,20,40,.4); }
+#finalBest { font-weight: 800; letter-spacing: 2px; opacity: .8; margin-top: 6px; }
+.hint { margin: 4px 0; font-weight: 700; font-size: 17px; opacity: .92; max-width: 420px; }
+.hint.small { font-size: 14px; opacity: .7; }
+.cta { margin-top: 28px; padding: 14px 28px; border-radius: 999px; background: var(--ink); color: #2a1220; font-weight: 900; font-size: 18px;
+  box-shadow: 0 6px 0 var(--pink), 0 14px 30px rgba(0,0,0,.35); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes bob { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-6px) } }
+@keyframes pulse { 0%,100% { transform: scale(1) } 50% { transform: scale(1.04) } }
+.touch { display: none; } .desk { display: inline; }
+body.is-touch .touch { display: inline; } body.is-touch .desk { display: none; }
+#gear { position: fixed; top: calc(env(safe-area-inset-top) + 14px); right: calc(env(safe-area-inset-right) + 14px); width: 44px; height: 44px;
+  border-radius: 14px; border: 0; color: var(--ink); background: rgba(20,12,24,.45); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  display: grid; place-items: center; cursor: pointer; z-index: 5; }
+#settings { position: fixed; top: calc(env(safe-area-inset-top) + 66px); right: calc(env(safe-area-inset-right) + 14px); width: 230px; padding: 16px;
+  border-radius: 18px; background: rgba(20,12,24,.78); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); z-index: 5;
+  font-weight: 800; font-size: 14px; transition: opacity .2s, transform .2s; transform-origin: top right; }
+#settings.hidden { opacity: 0; transform: scale(.96); pointer-events: none; }
+#settings label { display: flex; justify-content: space-between; margin-bottom: 8px; }
+#settings .row { align-items: center; margin-top: 14px; gap: 12px; }
+#settings input[type=range] { width: 100%; accent-color: var(--pink); }
+#settings .row input[type=range] { width: 110px; }
+#settings input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--pink); }
