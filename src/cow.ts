@@ -42,20 +42,44 @@ function spotsTexture() {
 }
 
 type Jelly = { off: THREE.Vector3; ripple: { value: number }; time: { value: number } };
-/** Vertex-level jelly: the top of the mesh lags behind by `off`, plus a travelling surface ripple. */
-function jellify(mat: THREE.Material, bottom: number, top: number): Jelly {
+type Fx = { wob: number; rim: number; rimCol?: number; shine?: number };
+
+/** Shared by every cow material: animation clock and overall per-vertex wobble strength. */
+const fxTime = { value: 0 };
+const fxWob = { value: 0.02 };
+let fxId = 0;
+
+/**
+ * Cow surface shader: every vertex wobbles along its normal (so all polys stay
+ * connected), optional jelly lag above `bottom`, plus a cartoon rim light and highlight.
+ */
+function jellify(mat: THREE.Material, fx: Fx, bottom = -99, top = -98): Jelly {
   const off = new THREE.Vector3();
-  const ripple = { value: 0 }, time = { value: 0 };
+  const ripple = { value: 0 }, time = fxTime;
+  const id = fxId++;
+  mat.customProgramCacheKey = () => `cowfx${id}`;
   mat.onBeforeCompile = sh => {
-    sh.uniforms.uOff = { value: off };
-    sh.uniforms.uRipple = ripple;
-    sh.uniforms.uTime = time;
+    Object.assign(sh.uniforms, {
+      uOff: { value: off }, uRipple: ripple, uTime: fxTime, uWob: fxWob,
+      uWobK: { value: fx.wob }, uRim: { value: fx.rim },
+      uRimCol: { value: new THREE.Color(fx.rimCol ?? 0xfff1e6) }, uShine: { value: fx.shine ?? 0.12 },
+    });
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uOff; uniform float uRipple; uniform float uTime;')
+      .replace('#include <common>', '#include <common>\nuniform vec3 uOff; uniform float uRipple; uniform float uTime; uniform float uWob; uniform float uWobK;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         float jw = smoothstep(${bottom.toFixed(3)}, ${top.toFixed(3)}, position.y);
         transformed += uOff * jw * jw;
-        transformed += normal * sin(position.x * 7.0 + position.y * 5.0 - uTime * 18.0) * uRipple * jw;`);
+        vec3 wp = position * 6.0;
+        float wob = sin(wp.x * 1.3 + uTime * 5.1) * sin(wp.y * 1.1 - uTime * 4.3) * sin(wp.z * 1.2 + uTime * 3.7)
+                  + 0.5 * sin(wp.x * 2.3 - wp.z * 1.7 + uTime * 6.7);
+        transformed += normal * (wob * uWob * uWobK + sin(position.x * 7.0 + position.y * 5.0 - uTime * 18.0) * uRipple * jw);`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uRim; uniform vec3 uRimCol; uniform float uShine;')
+      .replace('#include <opaque_fragment>', `
+        float fres = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 2.6);
+        float spot = smoothstep(0.82, 0.9, dot(normal, normalize(vec3(-0.35, 0.75, 0.55))));
+        outgoingLight += uRimCol * fres * uRim + vec3(1.0, 0.97, 0.93) * spot * uShine;
+        #include <opaque_fragment>`);
   };
   return { off, ripple, time };
 }
@@ -119,6 +143,15 @@ export class Cow {
     const hoof = std({ color: 0x3a2a26, roughness: 0.5 });
     const gold = std({ color: 0xffc94a, metalness: 0.85, roughness: 0.28 });
     const eyeW = std({ color: 0xffffff, roughness: 0.15 });
+    jellify(white, { wob: 0.8, rim: 0.4 });
+    jellify(black, { wob: 0.6, rim: 0.3, rimCol: 0xb9a4ff });
+    jellify(pinkDark, { wob: 1.2, rim: 0.45, rimCol: 0xffd6e0, shine: 0.25 });
+    jellify(snoutMat, { wob: 0.8, rim: 0.4, rimCol: 0xffd6e0, shine: 0.2 });
+    jellify(tongueMat, { wob: 1.4, rim: 0.35, shine: 0.3 });
+    jellify(eyeW, { wob: 0.25, rim: 0.2, shine: 0.4 });
+    jellify(horn, { wob: 0, rim: 0.3 });
+    jellify(hoof, { wob: 0, rim: 0.25 });
+    jellify(gold, { wob: 0, rim: 0.5, rimCol: 0xffe08a, shine: 0.3 });
     const sh = <T extends THREE.Object3D>(m: T) => { m.castShadow = true; m.receiveShadow = true; return m; };
 
     this.root.add(this.pivot);
@@ -127,7 +160,7 @@ export class Cow {
     this.inner.position.y = -this.pivotY;
 
     // ---- udder (the cow's one true foot) ----
-    this.uJ = jellify(pink, -0.6, 0.75);
+    this.uJ = jellify(pink, { wob: 1.25, rim: 0.55, rimCol: 0xffd6e0, shine: 0.3 }, -0.6, 0.75);
     this.udderMesh = sh(new THREE.Mesh(new THREE.SphereGeometry(0.72, 48, 32), pink));
     this.udder.add(this.udderMesh);
     this.inner.add(this.udder);
@@ -146,7 +179,7 @@ export class Cow {
 
     // ---- big round body ----
     const bodyGeo = new THREE.SphereGeometry(1, 56, 36); bodyGeo.scale(1.28, 0.92, 1.05);
-    this.bJ = jellify(bodyMat, -0.9, 0.95);
+    this.bJ = jellify(bodyMat, { wob: 1, rim: 0.45 }, -0.9, 0.95);
     this.body.add(sh(new THREE.Mesh(bodyGeo, bodyMat)));
     this.inner.add(this.body);
 
@@ -170,7 +203,7 @@ export class Cow {
     this.head.position.set(1.22, 0.42, 0);
     this.body.add(this.head);
     const skullGeo = new THREE.SphereGeometry(0.5, 40, 28); skullGeo.scale(1.0, 0.92, 1.0);
-    this.hJ = jellify(headMat, -0.4, 0.5);
+    this.hJ = jellify(headMat, { wob: 0.7, rim: 0.45 }, -0.4, 0.5);
     const skull = sh(new THREE.Mesh(skullGeo, headMat)); skull.position.set(0.12, 0.1, 0);
     this.head.add(skull);
     const patch = sh(new THREE.Mesh(new THREE.SphereGeometry(0.22, 18, 14), black));
@@ -334,7 +367,9 @@ export class Cow {
     this.udder.position.set(this.uX.out() * 0.45, 0.72 * sy, this.uZ.out() * 0.45);
     this.uJ.off.set(this.uX.out() * 0.8, this.uY.out() * 0.45, this.uZ.out() * 0.8);
     this.uJ.ripple.value = (0.012 + Math.min(0.1, Math.abs(this.uY.v) * 0.012)) * this.jiggle;
-    this.uJ.time.value = this.t;
+    fxTime.value = this.t;
+    const wobT = (0.02 + Math.min(0.05, Math.abs(this.uY.v) * 0.012 + Math.abs(this.bY.v) * 0.015)) * this.jiggle;
+    fxWob.value += (wobT - fxWob.value) * (1 - Math.exp(-dt * 8));
     this.teats.forEach((t, k) => {
       const q = (t.userData.base as THREE.Quaternion).clone();
       q.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(this.teatS[k].b.out(), 0, -this.teatS[k].a.out())));
@@ -354,13 +389,11 @@ export class Cow {
     this.body.rotation.x = this.uZ.out() * 0.3 + this.bZ.out() * 0.25;
     this.bJ.off.set(this.bX.out() * 0.85, this.bY.out() * 1.0, this.bZ.out() * 0.85);
     this.bJ.ripple.value = (0.01 + Math.min(0.08, Math.abs(this.bY.v) * 0.01 + Math.abs(this.bX.v) * 0.004)) * this.jiggle;
-    this.bJ.time.value = this.t;
 
     this.head.position.y = 0.42 + this.hY.out();
     this.head.rotation.z = this.hP.out() * 0.7 + Math.sin(this.t * 3.7) * 0.04;
     this.hJ.off.set(this.hP.out() * 0.3, this.hY.out() * 1.0, this.bZ.out() * 0.3);
     this.hJ.ripple.value = Math.min(0.05, Math.abs(this.hY.v) * 0.008) * this.jiggle;
-    this.hJ.time.value = this.t;
     const cs = 1 + THREE.MathUtils.clamp(this.cheekS.out(), -0.4, 0.7);
     this.cheeks.forEach(c => c.scale.set(cs, 1 / Math.sqrt(cs), cs));
 

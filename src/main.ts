@@ -274,7 +274,7 @@ function startRun() {
   resetRun();
   state = 'run';
   startEl.classList.add('hidden'); overEl.classList.add('hidden');
-  vy = JUMP_V * 0.8; sfx.boing(0.9);
+  vy = JUMP_V * 0.8;
 }
 
 const SILLY = ['BOING!', 'YEEHAW!', 'MOO!', 'WHEEE!', 'UDDERLY!', 'SPLORT!', 'BWOMP!', 'MOOVE!', 'JIGGLE!', 'HOOF YEAH!'];
@@ -289,14 +289,11 @@ function jump() {
     vy = Math.max(vy, JUMP_V) + (y < 0 ? -y * 6 : 0);
     if (y < 0) y = 0;
     cow.launch(1.2); cow.shake(1.4);
-    sfx.boing(0.9 + Math.random() * 0.25);
     if (Math.random() < 0.35) popWord(pick(SILLY), 0.9);
   } else {
     vy = DJUMP_V;
     flipT = 0;
     cow.launch(1.6); cow.shake(2.6);
-    sfx.boing(1.4); sfx.squeak();
-    if (Math.random() < 0.5) sfx.moo(1.6 + Math.random() * 0.5, 0.35);
     cow.teatTips.forEach(t => { t.getWorldPosition(tmp); emit(tmp, 6, MILK, 6, 2, 0.07, 22, 0.6); });
     popWord(pick(SILLY), 1.15);
   }
@@ -476,10 +473,9 @@ function step(dt: number) {
         if (impact > 9) {
           cow.land(Math.min(4.5, impact / 5));
           if (impact > 16 && Math.random() < 0.4) popWord(pick(['SPLOOSH!', 'SQUISH!', 'SPLAT!', 'BLORP!']), 1);
-          sfx.squish(impact / 14);
           cow.teatTips.forEach(t => { t.getWorldPosition(tmp); emit(tmp, 3 + ((impact / 5) | 0), MILK, 3, 4 + impact * 0.2, 0.06, 26, 0.55); });
           if (impact > 14) shake = Math.max(shake, 0.12);
-        } else { cow.land(0.6 + impact * 0.06); if (running || state === "menu") sfx.plop(); }
+        } else cow.land(0.6 + impact * 0.06);
         emit(new THREE.Vector3(0, 0.05, 0), 3, DUST, 2, 1.5, 0.12, 4, 0.5);
       }
       if (!compressed && wasCompressed) {

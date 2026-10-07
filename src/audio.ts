@@ -56,7 +56,6 @@ export class Sfx {
 
   boing(pitch = 1) { this.play('boing', pitch * (0.96 + Math.random() * 0.08), 0.55, 0.06); }
   squish(strength = 1) { this.play('squish', 1.15 - Math.min(1.5, strength) * 0.15 + Math.random() * 0.08, 0.35 + Math.min(1.5, strength) * 0.3, 0.07); }
-  plop() { this.play('squish', 1.45 + Math.random() * 0.15, 0.13, 0.12, 0, 0.32); }
   bell() { this.play('bell', 1.15 + Math.random() * 0.1, 0.45, 0.05); }
   moo(pitch = 1, dur = 2.2) { this.play('moo', pitch, 0.8, 0.3, 0, dur * pitch); }
   squeak() { this.play('squeak', 0.95 + Math.random() * 0.2, 0.45, 0.06); }
