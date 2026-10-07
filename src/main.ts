@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Cow } from './cow';
 import { Sfx } from './audio';
 import './style.css';
@@ -37,7 +38,14 @@ const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 400);
   scene.add(new THREE.Mesh(g, m));
 }
 
-const hemi = new THREE.HemisphereLight(0xffe3d0, 0x5a7a3a, 1.25);
+// soft image-based light so fur sheen, wet nose and milk get real reflections
+{
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.4;
+  pmrem.dispose();
+}
+const hemi = new THREE.HemisphereLight(0xffe3d0, 0x5a7a3a, 0.95);
 scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffe2b8, 2.6);
 sun.position.set(-6, 14, 8);
@@ -249,6 +257,81 @@ function emit(pos: THREE.Vector3, n: number, col: THREE.Color, spread: number, u
   }
 }
 
+// ---------- death: milk geyser ----------
+// ~6 L/s per teat. In this world 1 unit ≈ 0.5 m, so real gravity is ~20 units/s².
+const DROP_MAX = 1600, MILK_G = 20, L_PER_S = 24;
+const milkMat = new THREE.MeshPhysicalMaterial({ color: 0xfffdf6, roughness: 0.15, clearcoat: 1, clearcoatRoughness: 0.08, sheen: 0.4, sheenColor: new THREE.Color(0xfff2dc) });
+const drops = new THREE.InstancedMesh(new THREE.CapsuleGeometry(0.035, 0.1, 3, 8), milkMat, DROP_MAX);
+drops.frustumCulled = false; drops.count = 0; scene.add(drops);
+// drawn first without depth writes so the cow lying in it always renders on top
+const puddleMat = new THREE.MeshPhysicalMaterial({ color: 0xfffaf0, roughness: 0.1, clearcoat: 1, clearcoatRoughness: 0.05, transparent: true, opacity: 0.94, depthWrite: false });
+const puddle = new THREE.Mesh(new THREE.CircleGeometry(1, 64), puddleMat);
+puddle.renderOrder = -1;
+puddle.rotation.x = -Math.PI / 2; puddle.position.y = 0.03; puddle.receiveShadow = true; puddle.visible = false; scene.add(puddle);
+type Drop = { p: THREE.Vector3; v: THREE.Vector3; vol: number };
+const dropList: Drop[] = [];
+let milkRate = 0, milkTotal = 0, puddleVol = 0, dropCarry = 0, milkWordT = 0;
+const deadBox = new THREE.Box3();
+const UP = new THREE.Vector3(0, 1, 0), tipW = new THREE.Vector3(), baseW = new THREE.Vector3(), dirW = new THREE.Vector3(), vn = new THREE.Vector3();
+const MILK_WORDS = ['GOT MILK?', 'MILK GEYSER!', 'UDDERLY EMPTY', 'SPLOOSH!', 'FULL FAT!', 'DAIRY DISASTER', 'MOOOOILK!'];
+function resetMilk() {
+  dropList.length = 0; drops.count = 0; milkRate = 0; milkTotal = 0; puddleVol = 0; dropCarry = 0;
+  puddle.visible = false; milkEl.classList.remove('show'); sfx.stopLoop();
+}
+function updateMilk(dt: number, dx: number) {
+  if (state === 'dead') {
+    // pressure ramps up, then pulses like a heartbeat
+    milkRate = L_PER_S * Math.min(1, deadT * 2.5) * (0.78 + 0.22 * Math.sin(deadT * 9));
+    milkTotal += milkRate * dt;
+    const perSec = [30, 55, 85, 120][quality];
+    const vol = milkRate / 4 / perSec;
+    dropCarry += perSec * dt;
+    const n = Math.floor(dropCarry); dropCarry -= n;
+    const pulse = 1 + 0.15 * Math.sin(deadT * 9);
+    for (const t of cow.teatTips) {
+      t.getWorldPosition(tipW); t.parent!.getWorldPosition(baseW);
+      dirW.subVectors(tipW, baseW).normalize();
+      for (let k = 0; k < n && dropList.length < DROP_MAX; k++) {
+        const sp = (9 + Math.random() * 2.5) * pulse;
+        const v = dirW.clone().multiplyScalar(sp).add(vn.set((Math.random() - 0.5) * 0.7, (Math.random() - 0.5) * 0.7, (Math.random() - 0.5) * 0.7));
+        v.x += deadVx;
+        dropList.push({ p: tipW.clone().addScaledVector(v, Math.random() * dt), v, vol });
+      }
+    }
+    sfx.tickLoop();
+    milkWordT -= dt;
+    if (milkWordT < 0 && deadT > 0.4) { milkWordT = 1.3 + Math.random(); popWord(pick(MILK_WORDS), 1); }
+    milkEl.innerHTML = `${milkRate.toFixed(1)} <small>L/s</small><span>${milkTotal.toFixed(1)} L spilled</span>`;
+  }
+  let w = 0;
+  for (let i = dropList.length - 1; i >= 0; i--) {
+    const d = dropList[i];
+    d.v.y -= MILK_G * dt; d.v.multiplyScalar(Math.exp(-0.25 * dt));
+    d.p.addScaledVector(d.v, dt); d.p.x -= dx;
+    if (d.p.y < 0.04) {
+      if (!puddle.visible) { puddle.visible = true; puddle.position.set(d.p.x, 0.03, THREE.MathUtils.clamp(d.p.z, -1.5, 1.5)); }
+      else puddle.position.x += (d.p.x - puddle.position.x) * 0.01;
+      puddleVol += d.vol;
+      if (Math.random() < 0.06) emit(d.p.setY(0.05), 2, MILK, 2.5, 3, 0.035, 20, 0.35);
+      dropList[i] = dropList[dropList.length - 1]; dropList.pop();
+      continue;
+    }
+    dummy.position.copy(d.p);
+    dummy.quaternion.setFromUnitVectors(UP, vn.copy(d.v).normalize());
+    const st = 1 + Math.min(2.5, d.v.length() * 0.12);
+    dummy.scale.set(1, st, 1); dummy.updateMatrix();
+    drops.setMatrixAt(w++, dummy.matrix);
+  }
+  drops.count = w; drops.instanceMatrix.needsUpdate = true;
+  if (puddle.visible) {
+    puddle.position.x -= dx;
+    // 5 mm film: area = volume / thickness, converted to world units
+    const r = Math.min(5.5, Math.sqrt((puddleVol * 0.001) / 0.005 / Math.PI) * 2);
+    const s = THREE.MathUtils.lerp(puddle.scale.x, Math.max(0.2, r), 1 - Math.exp(-dt * 6));
+    puddle.scale.set(s, s * 0.8, 1);
+  }
+}
+
 // ---------- game state ----------
 const sfx = new Sfx();
 let state: 'menu' | 'run' | 'dead' = 'menu';
@@ -259,6 +342,7 @@ let nextSpawn = 0, shake = 0, comboTimer = 0, combo = 0, jumpBuffer = 0, flipT =
 const G = 40, JUMP_V = 15.5, DJUMP_V = 13.5, HOP_V = 5.4, GROUND_K = 480, GROUND_C = 8;
 const BASE_SPEED = 12, MAX_SPEED = 30;
 
+const milkEl = $('milk');
 const scoreEl = $('score'), bestEl = $('best'), startEl = $('start'), overEl = $('over'), comboEl = $('combo');
 bestEl.textContent = `BEST ${best}`;
 
@@ -267,6 +351,7 @@ function resetRun() {
   pickups.forEach(p => scene.remove(p.obj)); pickups.length = 0;
   speed = BASE_SPEED; dist = 0; score = 0; bells = 0; y = 0; vy = 0; jumpsLeft = 2; nextSpawn = 30; combo = 0;
   cow.reset(); cow.root.position.x = 0; cow.root.rotation.set(0, 0, 0);
+  resetMilk();
 }
 
 function startRun() {
@@ -288,12 +373,12 @@ function jump() {
   if (first) {
     vy = Math.max(vy, JUMP_V) + (y < 0 ? -y * 6 : 0);
     if (y < 0) y = 0;
-    cow.launch(1.2); cow.shake(1.4);
+    cow.launch(1.2);
     if (Math.random() < 0.35) popWord(pick(SILLY), 0.9);
   } else {
     vy = DJUMP_V;
     flipT = 0;
-    cow.launch(1.6); cow.shake(2.6);
+    cow.launch(1.6);
     cow.teatTips.forEach(t => { t.getWorldPosition(tmp); emit(tmp, 6, MILK, 6, 2, 0.07, 22, 0.6); });
     popWord(pick(SILLY), 1.15);
   }
@@ -307,7 +392,8 @@ function die() {
   tumble.set(0, 0, 0);
   shake = 0.6;
   cow.shake(6);
-  sfx.squish(1.5); sfx.moo();
+  sfx.squish(1.5); sfx.moo(); sfx.startLoop('spray', 0.55); milkWordT = 0.6;
+  milkEl.classList.add('show');
   emit(new THREE.Vector3(0.6, y + 1, 0), 40, MILK, 10, 12, 0.1, 28, 1.1);
   emit(new THREE.Vector3(0.9, 0.6, 0), 24, GOLD, 8, 8, 0.06, 20, 0.6);
   if (score > best) { best = score; localStorage.setItem('udder.best', String(best)); }
@@ -414,7 +500,7 @@ function applyQuality(q: number) {
 qEl.addEventListener('input', () => { autoQ = false; localStorage.setItem('udder.q', qEl.value); applyQuality(Number(qEl.value)); });
 soundEl.checked = localStorage.getItem('udder.sound') !== '0';
 sfx.enabled = soundEl.checked;
-soundEl.addEventListener('change', () => { sfx.enabled = soundEl.checked; localStorage.setItem('udder.sound', soundEl.checked ? '1' : '0'); });
+soundEl.addEventListener('change', () => { sfx.enabled = soundEl.checked; if (!sfx.enabled) sfx.stopLoop(); localStorage.setItem('udder.sound', soundEl.checked ? '1' : '0'); });
 jigEl.value = localStorage.getItem('udder.jiggle') ?? '1';
 cow.jiggle = Number(jigEl.value);
 jigEl.addEventListener('input', () => { cow.jiggle = Number(jigEl.value); localStorage.setItem('udder.jiggle', jigEl.value); cow.shake(3); });
@@ -507,12 +593,20 @@ function step(dt: number) {
     if (mooTimer < 0) { mooTimer = 7 + Math.random() * 8; sfx.moo(1.1 + Math.random() * 0.6, 0.55); popWord('moo', 0.8); }
   }
   cow.update(dt, y, vy, state === 'dead' ? 4 : scroll, state === 'dead');
+  if (state === 'dead') {
+    // a tumbling cow rests on whatever side is lowest instead of sinking into the ground
+    cow.root.updateMatrixWorld(true);
+    deadBox.setFromObject(cow.root);
+    if (deadBox.min.y < 0.02) cow.root.position.y += 0.02 - deadBox.min.y;
+  }
   if (state !== 'dead') cow.root.rotation.z = THREE.MathUtils.lerp(cow.root.rotation.z, grounded ? 0 : THREE.MathUtils.clamp(vy * 0.015, -0.2, 0.2), 1 - Math.exp(-dt * 8));
   blobShadow.position.x = cow.root.position.x;
   const bs = 1 / (1 + Math.max(0, y) * 0.35); blobShadow.scale.set(1.3 * bs, 0.8 * bs, 1);
 
   // scroll world
   const dx = scroll * dt;
+  updateMilk(dt, dx);
+  cow.panic += ((state === 'dead' ? 1 : 0) - cow.panic) * (1 - Math.exp(-dt * 8));
   grassTex.offset.x += dx / (400 / 60);
   dirtTex.offset.x += dx / (400 / 100);
   for (const s of scrollers) { s.obj.position.x -= dx; if (s.obj.position.x < BACK) s.obj.position.x += s.span; }

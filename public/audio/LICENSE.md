@@ -15,3 +15,9 @@ permitted with no attribution required; credit is given here as a courtesy.
 
 License details: https://bigsoundbank.com/droit.php and
 https://creativecommons.org/publicdomain/zero/1.0/
+
+## spray.mp3
+- Source: "Long spray" — https://bigsoundbank.com/long-spray-s0043.html (sound #43)
+- Author: Joseph SARDIN
+- License: CC0 1.0 (public domain equivalent) — commercial use allowed, no attribution required. https://creativecommons.org/publicdomain/zero/1.0/
+- Edit: three bursts crossfaded into one loopable gush, mono, loudness-normalised.

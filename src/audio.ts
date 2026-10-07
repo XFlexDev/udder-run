@@ -1,5 +1,5 @@
-type Clip = 'boing' | 'moo' | 'squish' | 'squeak' | 'bell';
-const CLIPS: Clip[] = ['boing', 'moo', 'squish', 'squeak', 'bell'];
+type Clip = 'boing' | 'moo' | 'squish' | 'squeak' | 'bell' | 'spray';
+const CLIPS: Clip[] = ['boing', 'moo', 'squish', 'squeak', 'bell', 'spray'];
 
 /** Recorded CC0 sound effects (see public/audio/LICENSE.md), played through Web Audio for pitch variation. */
 export class Sfx {
@@ -9,6 +9,31 @@ export class Sfx {
   private buffers = new Map<Clip, AudioBuffer>();
   private loading: Promise<void> | null = null;
   private lastPlay = new Map<Clip, number>();
+  private loop: { src: AudioBufferSourceNode; g: GainNode } | null = null;
+  private loopWant: { name: Clip; gain: number } | null = null;
+
+  /** Continuous looping clip (milk geyser); starts as soon as the buffer is decoded. */
+  startLoop(name: Clip, gain = 0.5) {
+    this.loopWant = { name, gain };
+    const buf = this.buffers.get(name);
+    if (this.loop || !this.enabled || !this.ctx || !this.master || !buf) return;
+    const src = this.ctx.createBufferSource(), g = this.ctx.createGain();
+    src.buffer = buf; src.loop = true;
+    const t = this.ctx.currentTime;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + 0.15);
+    src.connect(g).connect(this.master); src.start(t);
+    this.loop = { src, g };
+  }
+  stopLoop() {
+    this.loopWant = null;
+    if (!this.loop || !this.ctx) return;
+    const { src, g } = this.loop, t = this.ctx.currentTime;
+    g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(g.gain.value, t); g.gain.linearRampToValueAtTime(0, t + 0.2);
+    src.stop(t + 0.25);
+    this.loop = null;
+  }
+  /** retry a wanted loop whose buffer wasn't decoded yet */
+  tickLoop() { if (this.loopWant && !this.loop) this.startLoop(this.loopWant.name, this.loopWant.gain); }
 
   unlock() {
     if (!this.ctx) {
