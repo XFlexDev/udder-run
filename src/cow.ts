@@ -5,7 +5,11 @@ class Spring {
   x = 0; v = 0;
   constructor(public k: number, public c: number, public lim = 1) {}
   step(dt: number, force: number) {
-    this.v += (-this.k * this.x - this.c * this.v + force) * dt;
+    // Semi-implicit spring with bounded drive/velocity. The old unbounded
+    // landing impulse could cross the soft limit in one frame and look like a snap.
+    const drive = THREE.MathUtils.clamp(force, -360, 360);
+    this.v += (-this.k * this.x - this.c * this.v + drive) * dt;
+    this.v = THREE.MathUtils.clamp(this.v, -24, 24);
     this.x += this.v * dt;
   }
   out() { return this.lim * Math.tanh(this.x / this.lim); }
@@ -91,6 +95,8 @@ export class Cow {
   private tongueS = new Spring(48, 1.0, 1.5);
   private cheekS = new Spring(100, 1.8, 0.7);
   private lastVy = 0;
+  private smoothAy = 0;
+  private motionReady = false;
   private t = 0;
   private blink = 2;
   private tongueOut = 0;
@@ -128,8 +134,9 @@ export class Cow {
     const teatGeo = new THREE.CapsuleGeometry(0.1, 0.28, 6, 14); teatGeo.translate(0, -0.2, 0);
     ([[0.22, 0.22], [0.22, -0.22], [-0.22, 0.22], [-0.22, -0.22]] as const).forEach(([x, z]) => {
       const tg = new THREE.Group();
-      tg.position.copy(new THREE.Vector3(x, -0.5, z).normalize().multiplyScalar(0.69));
-      tg.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), new THREE.Vector3(x * 2.6, -0.45, z * 2.6).normalize());
+      // Keep teats around the lower sides, not under the contact patch.
+      tg.position.copy(new THREE.Vector3(x, -0.28, z).normalize().multiplyScalar(0.67));
+      tg.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), new THREE.Vector3(x * 2.8, -0.12, z * 2.8).normalize());
       tg.add(sh(new THREE.Mesh(teatGeo, pinkDark)));
       const tip = new THREE.Object3D(); tip.position.y = -0.4; tg.add(tip);
       this.teatTips.push(tip);
@@ -239,7 +246,7 @@ export class Cow {
   reset() {
     this.all().forEach(s => s.reset());
     this.root.rotation.set(0, 0, 0);
-    this.spin = 0; this.lastVy = 0; this.tongueOut = 0;
+    this.spin = 0; this.lastVy = 0; this.smoothAy = 0; this.motionReady = false; this.tongueOut = 0;
   }
 
   /** shove every spring in a random direction */
@@ -272,9 +279,14 @@ export class Cow {
 
   update(dt: number, y: number, vy: number, speed: number, dead: boolean) {
     this.t += dt;
-    const ay = THREE.MathUtils.clamp((vy - this.lastVy) / Math.max(dt, 1e-4), -900, 900);
+    const rawAy = this.motionReady ? THREE.MathUtils.clamp((vy - this.lastVy) / Math.max(dt, 1e-4), -150, 150) : 0;
+    this.motionReady = true;
     this.lastVy = vy;
-    const J = this.jiggle * 1.25;
+    // Low-pass the physics impulse before it reaches the visual rig. This keeps
+    // hard landings juicy without a one-frame pose discontinuity.
+    this.smoothAy += (rawAy - this.smoothAy) * (1 - Math.exp(-dt * 13));
+    const ay = this.smoothAy;
+    const J = 0.7 + this.jiggle * 0.65;
     const spinV = Math.sin(this.spin) * 30;
 
     const n = Math.max(1, Math.ceil(dt / (1 / 240)));
@@ -327,12 +339,15 @@ export class Cow {
       const q = (t.userData.base as THREE.Quaternion).clone();
       q.multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(this.teatS[k].b.out(), 0, -this.teatS[k].a.out())));
       t.quaternion.copy(q);
-      t.scale.set(1, 1 + comp * 1.1, 1);
+      const tuck = THREE.MathUtils.lerp(1, 0.72, comp / 0.5);
+      t.scale.set(tuck, tuck, tuck);
     });
 
-    const bodyY = 1.44 * sy * 0.82 + 0.72 + this.bY.out();
+    const bsq = THREE.MathUtils.clamp(1 - this.bY.out() * 1.15 + comp * 0.12, 0.84, 1.16);
+    // Anchor the belly to the top of the udder. Previously the two scales used
+    // unrelated formulas, so they crossed deeply or visibly separated.
+    const bodyY = 1.44 * sy + 0.92 * bsq - 0.38 + this.bY.out() * 0.25;
     this.body.position.set(0, bodyY, 0);
-    const bsq = THREE.MathUtils.clamp(1 - this.bY.out() * 1.3 + comp * 0.15, 0.82, 1.18);
     const bw = 1 / Math.sqrt(Math.max(0.45, bsq));
     this.body.scale.set(bw, bsq, bw);
     this.body.rotation.z = this.bP.out() + (dead ? 0 : THREE.MathUtils.clamp(vy * 0.01, -0.18, 0.18));

@@ -88,7 +88,7 @@ for (let i = 0; i < 14; i++) {
 // ---------- scrolling scenery ----------
 type Scroller = { obj: THREE.Object3D; span: number };
 const scrollers: Scroller[] = [];
-const SPAN = 160, BACK = -45;
+const SPAN = 160, TREE_SPAN = 200, BACK = -45;
 const treeTrunk = new THREE.MeshStandardMaterial({ color: 0x7a4e2d, roughness: 0.9 });
 const leafMats = [0x4f9a3a, 0x5cae45, 0x3f8a30, 0x76b84e].map(c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.85, flatShading: true }));
 function makeTree() {
@@ -105,11 +105,12 @@ function makeTree() {
   const s = 0.8 + Math.random() * 0.9; g.scale.setScalar(s);
   return g;
 }
-for (let i = 0; i < 34; i++) {
+for (let i = 0; i < 42; i++) {
   const t = makeTree();
   const far = i % 3 !== 0;
-  t.position.set(BACK + Math.random() * SPAN, 0, far ? -12 - Math.random() * 30 : -6 - Math.random() * 4);
-  scene.add(t); scrollers.push({ obj: t, span: SPAN });
+  // wrap trees beyond the fog's far plane so they never pop into view
+  t.position.set(BACK + Math.random() * TREE_SPAN, 0, far ? -12 - Math.random() * 30 : -6 - Math.random() * 4);
+  scene.add(t); scrollers.push({ obj: t, span: TREE_SPAN });
 }
 // fence along the back of the track
 const postGeo = new THREE.BoxGeometry(0.16, 1.1, 0.16);
@@ -323,11 +324,17 @@ function die() {
 }
 
 const popLayer = document.createElement('div'); popLayer.id = 'pops'; document.body.appendChild(popLayer);
+let lastPopAt = -10, lastPopText = '';
 function popWord(text: string, size = 1) {
+  if (text === lastPopText && time - lastPopAt < 0.3) return;
+  lastPopAt = time; lastPopText = text;
+  while (popLayer.children.length > 2) popLayer.firstElementChild?.remove();
   const el = document.createElement('div');
   el.className = 'pop'; el.textContent = text;
   cow.root.getWorldPosition(tmp); tmp.y += 3.2; tmp.project(camera);
-  const x = (tmp.x * 0.5 + 0.5) * innerWidth + (Math.random() - 0.5) * 60, yy = (-tmp.y * 0.5 + 0.5) * innerHeight;
+  const x = (tmp.x * 0.5 + 0.5) * innerWidth + (Math.random() - 0.5) * 60;
+  const stack = popLayer.children.length;
+  const yy = (-tmp.y * 0.5 + 0.5) * innerHeight - stack * 54;
   el.style.left = `${Math.min(innerWidth - 80, Math.max(80, x))}px`; el.style.top = `${Math.max(90, yy)}px`;
   el.style.setProperty('--r', `${(Math.random() - 0.5) * 24}deg`);
   el.style.setProperty('--s', String(size));
@@ -566,7 +573,8 @@ function step(dt: number) {
     p.life -= dt;
     if (p.life <= 0) { parts.splice(i, 1); continue; }
     p.v.y -= p.grav * dt; p.p.addScaledVector(p.v, dt);
-    if (p.p.y < 0.03) { p.p.y = 0.03; p.v.set(-scroll, 0, 0); }
+    const floor = 0.035 + p.s;
+    if (p.p.y < floor) { p.p.y = floor; p.v.y = Math.abs(p.v.y) * 0.18; p.v.x = -scroll * 0.75; p.v.z *= 0.6; }
   }
   for (let i = 0; i < P_MAX; i++) {
     const p = parts[i];
@@ -586,7 +594,8 @@ function step(dt: number) {
   tmp.set(camBase.x + sway, camBase.y + follow, camBase.z);
   if (state === 'dead') tmp.x += Math.min(deadT, 1) * 1.5;
   camera.position.lerp(tmp, 1 - Math.exp(-dt * 5));
-  camera.position.x += Math.sin(time * 47) * shake; camera.position.y += Math.cos(time * 39) * shake;
+  const trauma = shake * shake;
+  camera.position.x += Math.sin(time * 19.7) * trauma; camera.position.y += Math.cos(time * 17.3) * trauma;
   camera.lookAt(camLook.x + (state === 'dead' ? deadX - Math.min(deadT, 1) * 3 : 0), camLook.y + follow * 0.85, camLook.z);
 }
 
